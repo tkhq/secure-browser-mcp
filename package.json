@@ -1,0 +1,38 @@
+{
+  "name": "secure-browser-mcp",
+  "version": "0.0.1",
+  "private": true,
+  "description": "MCP server that brokers Turnkey-stored secrets into a browser it exclusively owns, without exposing secret material to the agent",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "bun build src/index.ts --target=node --outdir=dist",
+    "fmt": "prettier --write .",
+    "fmt:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@turnkey/crypto": "file:vendor/turnkey-crypto.tgz",
+    "@turnkey/sdk-server": "file:vendor/turnkey-sdk-server.tgz",
+    "puppeteer-core": "^24.0.0",
+    "zod": "^3.25.0"
+  },
+  "overrides": {
+    "@turnkey/api-key-stamper": "file:vendor/turnkey-api-key-stamper.tgz",
+    "@turnkey/crypto": "file:vendor/turnkey-crypto.tgz",
+    "@turnkey/encoding": "file:vendor/turnkey-encoding.tgz",
+    "@turnkey/http": "file:vendor/turnkey-http.tgz",
+    "@turnkey/sdk-types": "file:vendor/turnkey-sdk-types.tgz",
+    "@turnkey/wallet-stamper": "file:vendor/turnkey-wallet-stamper.tgz",
+    "@turnkey/webauthn-stamper": "file:vendor/turnkey-webauthn-stamper.tgz"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
