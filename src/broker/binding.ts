@@ -10,6 +10,12 @@ export class BindingViolationError extends Error {
   }
 }
 
+/** Page-side facts the policy needs but cannot compute itself. */
+export type BindingProbe = {
+  /** Whether the resolved target element matches a CSS selector. */
+  elementMatches: (selector: string) => Promise<boolean>;
+};
+
 /**
  * Destination-binding enforcement — the broker-side prompt-injection defense.
  * A malicious page can talk the agent into *requesting* a fill, but the fill
@@ -22,18 +28,53 @@ export class BindingViolationError extends Error {
  */
 export class BindingPolicy {
   /** Throws `BindingViolationError` unless the fill target satisfies the binding. */
-  assertAllowed(ref: SecretRef, target: FillTarget): void {
-    if (!ref.binding) {
+  async assertAllowed(
+    ref: SecretRef,
+    target: FillTarget,
+    probe: BindingProbe,
+  ): Promise<void> {
+    const binding = ref.binding;
+    if (!binding) {
       throw new BindingViolationError(
         ref,
         target,
         "secret has no destination binding; unbound secrets are not fillable",
       );
     }
-    // TODO(scaffold): implement —
-    //   1. origin: exact match of new URL(target.pageUrl).origin
-    //   2. urlPattern: URLPattern test against pathname+search
-    //   3. selector: resolved element must match binding.selector
-    throw new Error("not_implemented: BindingPolicy.assertAllowed");
+
+    const url = new URL(target.pageUrl);
+    if (url.origin !== binding.origin) {
+      throw new BindingViolationError(
+        ref,
+        target,
+        `page origin ${url.origin} does not match bound origin ${binding.origin}`,
+      );
+    }
+
+    if (binding.urlPattern) {
+      const pattern = new URLPattern({
+        pathname: binding.urlPattern,
+        baseURL: binding.origin,
+      });
+      if (!pattern.test(target.pageUrl)) {
+        throw new BindingViolationError(
+          ref,
+          target,
+          `page path ${url.pathname} does not match bound pattern ${binding.urlPattern}`,
+        );
+      }
+    }
+
+    if (binding.selector) {
+      const matches = await probe.elementMatches(binding.selector);
+      if (!matches) {
+        throw new BindingViolationError(
+          ref,
+          target,
+          `target element${target.selectorInfo ? ` (${target.selectorInfo})` : ""} ` +
+            `does not match bound selector ${binding.selector}`,
+        );
+      }
+    }
   }
 }

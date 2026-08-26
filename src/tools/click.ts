@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { defineTool, NotImplementedError } from "./tool.js";
+import { defineTool } from "./tool.js";
 
 export const click = defineTool({
   name: "click",
@@ -8,7 +8,17 @@ export const click = defineTool({
   inputSchema: {
     element_uid: z.string(),
   },
-  handler: async (_ctx, _args) => {
-    throw new NotImplementedError("click");
+  handler: async (ctx, args) => {
+    await ctx.session.ensureStarted();
+    const element = ctx.session.resolveElement(args.element_uid);
+    try {
+      await element.handle.click();
+    } catch {
+      // Custom-styled controls often hide the real input (zero-size or
+      // opacity 0), which defeats a coordinate click. Fall back to a DOM
+      // click — broker-authored fixed code, not agent-supplied script.
+      await element.handle.evaluate((el) => (el as HTMLElement).click());
+    }
+    return { clicked: args.element_uid };
   },
 });

@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit",
     "build": "bun build src/index.ts --target=node --outdir=dist",
     "fmt": "prettier --write .",
-    "fmt:check": "prettier --check ."
+    "fmt:check": "prettier --check .",
+    "test": "bun test",
+    "demo:fixture": "bun run test/fixtures/serve.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
@@ -30,7 +32,8 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "prettier": "^3.0.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "@types/bun": "^1.2.0"
   },
   "engines": {
     "node": ">=20"

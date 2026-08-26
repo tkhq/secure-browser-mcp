@@ -57,6 +57,17 @@ export class MockSecretsClient implements SecretsClient {
 
 const DEFAULT_SEED: MockSecret[] = [
   {
+    // Bound to the local demo fixture (test/fixtures/login.html served on
+    // port 4173) so the end-to-end demo works out of the box.
+    name: "demo-login-password",
+    value: "mock-demo-p@ssw0rd-1234",
+    staticProperties: {
+      [BINDING_KEYS.origin]: "http://localhost:4173",
+      [BINDING_KEYS.urlPattern]: "/login*",
+      [BINDING_KEYS.selector]: "input[type=password]",
+    },
+  },
+  {
     name: "example-login-password",
     value: "mock-hunter2-do-not-use",
     staticProperties: {

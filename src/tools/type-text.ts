@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { defineTool, NotImplementedError } from "./tool.js";
+import { defineTool } from "./tool.js";
 
 export const typeText = defineTool({
   name: "type_text",
@@ -11,7 +11,11 @@ export const typeText = defineTool({
     element_uid: z.string(),
     text: z.string(),
   },
-  handler: async (_ctx, _args) => {
-    throw new NotImplementedError("type_text");
+  handler: async (ctx, args) => {
+    await ctx.session.ensureStarted();
+    const element = ctx.session.resolveElement(args.element_uid);
+    await element.handle.click();
+    await element.handle.type(args.text);
+    return { typed: args.element_uid, length: args.text.length };
   },
 });

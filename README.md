@@ -6,7 +6,7 @@ The agent sees secret references, not secret values. Secrets live in [Turnkey Se
 
 It covers the secrets that cannot be proxied through an API: passwords, card numbers, and SSNs typed into web forms.
 
-**Status: scaffold.** The interfaces, tool surface, and security boundaries are in place. Most handlers return `not_implemented`. See [docs/DESIGN.md](docs/DESIGN.md) for the full design and [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) for what this does and does not defend against.
+**Status: working demo.** The full fill flow runs end to end against a mock secrets backend: browser session, snapshots with stable element uids, destination-binding enforcement, CDP injection, and structural redaction. Not yet implemented: network-request capture, human confirmation, consensus exports, screenshots. See [docs/DESIGN.md](docs/DESIGN.md) for the full design and [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) for what this does and does not defend against.
 
 ## How it works
 
@@ -24,7 +24,9 @@ There is no `evaluate_script` tool. That is a security decision, not a gap.
 ```sh
 bun install
 bun run typecheck
-bun run dev          # starts the MCP server on stdio (mock secrets backend)
+bun test             # end-to-end: fills a secret into a local login page and
+                     # asserts the plaintext never appears in server output
+bun run dev          # starts the MCP server on stdio
 ```
 
 Inspect the tool surface:
@@ -33,7 +35,24 @@ Inspect the tool surface:
 bunx @modelcontextprotocol/inspector bun src/index.ts
 ```
 
-The server uses an in-memory mock backend until Turnkey credentials are configured. The real backend is a thin adapter over `@turnkey/sdk-server` (`importSecret` / `exportSecret` / `getSecrets`, merged in [tkhq/sdk#1479](https://github.com/tkhq/sdk/pull/1479)).
+Try the demo by hand: run `bun run demo:fixture` to serve a login page at `http://localhost:4173/login`, connect any MCP client, and fill the seeded `demo-login-password` secret into the password field.
+
+The server needs a Chromium-based browser. It checks `SBM_CHROME_PATH` first, then common install locations (Chrome, Chromium, Brave, Edge). Set `SBM_HEADLESS=false` to watch it work.
+
+## Backends
+
+The server uses an in-memory mock backend by default. Set these to use real Turnkey Secrets (closed beta):
+
+```sh
+export TURNKEY_API_PUBLIC_KEY=...
+export TURNKEY_API_PRIVATE_KEY=...
+export TURNKEY_ORGANIZATION_ID=...
+export TURNKEY_API_BASE_URL=https://api.turnkey.com   # optional, this is the default
+```
+
+The Turnkey backend is a thin adapter over `@turnkey/sdk-server` (`importSecret` / `exportSecret` / `getSecrets`, merged in [tkhq/sdk#1479](https://github.com/tkhq/sdk/pull/1479)). For a secret to be fillable, import it with the binding static properties (`sbm:origin`, optional `sbm:url-pattern` and `sbm:selector` — see `src/broker/types.ts`).
+
+For a real-world walkthrough — an agent paying a Stripe test checkout with a card it can never read — see [docs/DEMO-STRIPE.md](docs/DEMO-STRIPE.md).
 
 ## Dependencies on unpublished SDK code
 
