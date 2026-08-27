@@ -54,6 +54,26 @@ The Turnkey backend is a thin adapter over `@turnkey/sdk-server` (`importSecret`
 
 For a real-world walkthrough — an agent paying a Stripe test checkout with a card it can never read — see [docs/DEMO-STRIPE.md](docs/DEMO-STRIPE.md).
 
+## Agent Skills
+
+`skills/secure-browser/` ships an [Agent Skill](https://agentskills.io) that teaches agents the fill protocol: secrets are handles, binding rejections are policy, and the quirks that waste turns. Install it:
+
+```sh
+bun run skill:install -- --claude            # ~/.claude/skills/
+bun run skill:install -- --claude --project  # ./.claude/skills/
+bun run skill:install -- --codex             # ~/.codex/skills/
+```
+
+A skill is just a folder — copying `skills/secure-browser/` anywhere a skills-compatible agent looks works too.
+
+## Evals
+
+`evals/` runs a real headless agent (Claude Code today) against the server with the mock backend and grades the transcript: no secret leakage, `fill_secret` used instead of `type_text`, task completed, plus tool-call metrics for spotting regressions across PRs. See [evals/README.md](evals/README.md).
+
+```sh
+bun run eval
+```
+
 ## Dependencies on unpublished SDK code
 
 The Secrets API methods are on `tkhq/sdk` main but not on npm yet. The `vendor/` directory holds tarballs packed from a local `../sdk` checkout, pinned through `overrides` in `package.json`. Remove the vendor tarballs and the overrides once `@turnkey/sdk-server@8.3.0` ships.
