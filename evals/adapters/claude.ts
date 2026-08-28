@@ -4,10 +4,33 @@
  * into ToolCallEvents.
  */
 import { spawn } from "node:child_process";
+import { z } from "zod";
 import type { Adapter, AdapterRun, ToolCallEvent } from "./types.js";
 
 /** MCP tools are namespaced mcp__<server-key>__<tool>. */
 const TOOL_PREFIX = "mcp__secure-browser__";
+
+// The slices of Claude Code's stream-json output the harness consumes.
+// Unknown block types fall out of the discriminated union and are skipped.
+const toolUseBlock = z.object({
+  type: z.literal("tool_use"),
+  id: z.string(),
+  name: z.string(),
+  input: z.record(z.unknown()).default({}),
+});
+const toolResultBlock = z.object({
+  type: z.literal("tool_result"),
+  tool_use_id: z.string(),
+  is_error: z.boolean().optional(),
+  content: z
+    .union([z.string(), z.array(z.object({ text: z.string().optional() }))])
+    .optional(),
+});
+const streamLine = z.object({
+  type: z.string(),
+  result: z.string().optional(),
+  message: z.object({ content: z.array(z.unknown()).default([]) }).optional(),
+});
 
 export const claudeAdapter: Adapter = {
   name: "claude",
@@ -51,31 +74,39 @@ export const claudeAdapter: Adapter = {
     let finalText = "";
     for (const line of rawTranscript.split("\n")) {
       if (!line.trim()) continue;
-      let msg: any;
+      let json: unknown;
       try {
-        msg = JSON.parse(line);
+        json = JSON.parse(line);
       } catch {
         continue;
       }
-      for (const block of msg?.message?.content ?? []) {
-        if (msg.type === "assistant" && block.type === "tool_use") {
-          const event: ToolCallEvent = {
-            tool: block.name,
-            args: block.input ?? {},
-            result: "",
-            isError: false,
-          };
-          useById.set(block.id, event);
-          events.push(event);
+      const parsed = streamLine.safeParse(json);
+      if (!parsed.success) continue;
+      const msg = parsed.data;
+      for (const rawBlock of msg.message?.content ?? []) {
+        if (msg.type === "assistant") {
+          const use = toolUseBlock.safeParse(rawBlock);
+          if (use.success) {
+            const event: ToolCallEvent = {
+              tool: use.data.name,
+              args: use.data.input,
+              result: "",
+              isError: false,
+            };
+            useById.set(use.data.id, event);
+            events.push(event);
+          }
         }
-        if (msg.type === "user" && block.type === "tool_result") {
-          const event = useById.get(block.tool_use_id);
+        if (msg.type === "user") {
+          const res = toolResultBlock.safeParse(rawBlock);
+          if (!res.success) continue;
+          const event = useById.get(res.data.tool_use_id);
           if (!event) continue;
-          event.isError = block.is_error === true;
+          event.isError = res.data.is_error === true;
           event.result =
-            typeof block.content === "string"
-              ? block.content
-              : (block.content ?? []).map((c: any) => c.text ?? "").join("\n");
+            typeof res.data.content === "string"
+              ? res.data.content
+              : (res.data.content ?? []).map((c) => c.text ?? "").join("\n");
         }
       }
       if (msg.type === "result") finalText = msg.result ?? "";
