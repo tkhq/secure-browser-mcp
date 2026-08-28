@@ -59,7 +59,7 @@ No `evaluate_script`. Agent-authored JS can hook `input` events and exfiltrate a
 
 Run the same broker inside [Turnkey Verifiable Cloud](https://docs.turnkey.com/features/verifiable-cloud/overview). What changes:
 
-- The export key only ever exists inside an attested enclave. No machine the agent can shell into ever holds plaintext. This closes the local deployment's honest-agent gap (see THREAT-MODEL.md).
+- The export key only ever exists inside an attested enclave. No machine the agent can shell into ever holds plaintext. This closes the local deployment's honest-agent gap (see [THREAT-MODEL.md](./THREAT-MODEL.md)).
 - Boot proofs pin the broker code. Redaction and binding enforcement become verifiable properties of the QOS manifest.
 - App proofs sign a fill audit trail: "this enclave filled secret X into origin Y at T."
 - Target state: a Turnkey policy that only allows `exportSecret` when the target key is an attested TVC broker key. The secret becomes structurally unusable outside the verified broker.
