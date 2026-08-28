@@ -26,6 +26,16 @@ The secure-browser MCP server is a credential broker that owns a browser. You dr
 6. `snapshot` to verify: the filled field's value reads `[REDACTED:secret-filled-field]`.
 7. `click` the submit button, then `snapshot` (repeat with short waits) until the page moves on.
 
+## Consensus approvals
+
+Some secrets need multi-party approval to export. `fill_secret` then returns `status: "pending_approval"` with a `fill_id` and a Turnkey activity id instead of filling. This is normal, not an error:
+
+1. Tell the user which activity needs approval so an approver can sign it (Turnkey dashboard).
+2. Leave the page where it is — the fill re-validates the destination before injecting.
+3. Call `await_fill(fill_id)`. If it returns `pending_approval` again, the approval hasn't landed yet; wait and call again. When approved, it completes the fill exactly like `fill_secret` would have.
+
+If `await_fill` reports the target element is gone (the page changed while waiting), snapshot again and start a new `fill_secret`.
+
 ## Binding rejections are policy, not bugs
 
 `fill_secret` refuses when the page origin, URL, or element doesn't match the secret's binding. Do not work around a refusal by picking a different element, a different secret, or a different URL. Report the refusal to the user and stop that fill.

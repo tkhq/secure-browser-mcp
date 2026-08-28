@@ -3,6 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ZodRawShape } from "zod";
 
 import { scrub } from "./redaction/scrub.js";
+import { awaitFill } from "./tools/await-fill.js";
 import { click } from "./tools/click.js";
 import { fillSecret } from "./tools/fill-secret.js";
 import { listNetwork } from "./tools/list-network.js";
@@ -23,6 +24,7 @@ const TOOLS: AnyToolDef[] = [
   click,
   typeText,
   fillSecret,
+  awaitFill,
   listNetwork,
 ];
 

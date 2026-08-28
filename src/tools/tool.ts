@@ -1,9 +1,22 @@
 import type { ZodRawShape, objectOutputType, ZodTypeAny } from "zod";
 
 import type { BindingPolicy } from "../broker/binding.js";
-import type { SecretsClient } from "../broker/secrets-client.js";
+import type { PendingExport, SecretsClient } from "../broker/secrets-client.js";
 import type { BrowserSession } from "../browser/session.js";
 import type { RedactionRegistry } from "../redaction/registry.js";
+
+/**
+ * A fill_secret call parked on consensus approval. Broker memory only — the
+ * agent holds just the fillId. The original target is retained so the fill
+ * can be re-validated against the live page once approvals land.
+ */
+export type PendingFill = {
+  fillId: string;
+  pending: PendingExport;
+  elementUid: string;
+  pageUrl: string;
+  createdAt: number;
+};
 
 /** Shared wiring every tool handler receives. */
 export type ToolContext = {
@@ -11,6 +24,7 @@ export type ToolContext = {
   session: BrowserSession;
   registry: RedactionRegistry;
   binding: BindingPolicy;
+  pendingFills: Map<string, PendingFill>;
 };
 
 /**

@@ -12,12 +12,23 @@ import { RedactionRegistry } from "./redaction/registry.js";
 import { createServer } from "./server.js";
 
 // Backend selection: Turnkey when credentials are configured, mock otherwise.
+// SBM_MOCK_CONSENSUS (comma-separated secret names) makes those mock secrets
+// consensus-gated, with approval arriving SBM_MOCK_CONSENSUS_DELAY_MS after
+// the first export attempt — enough to exercise the pending → await flow.
 function makeSecretsClient(): { client: SecretsClient; backend: string } {
   const apiClient = turnkeyClientFromEnv();
   if (apiClient) {
     return { client: new TurnkeySecretsClient(apiClient), backend: "turnkey" };
   }
-  return { client: new MockSecretsClient(), backend: "mock" };
+  const consensus = process.env["SBM_MOCK_CONSENSUS"];
+  const delay = Number(process.env["SBM_MOCK_CONSENSUS_DELAY_MS"] ?? "3000");
+  const client = new MockSecretsClient(
+    undefined,
+    consensus
+      ? { consensusNames: consensus.split(","), approvalDelayMs: delay }
+      : {},
+  );
+  return { client, backend: "mock" };
 }
 
 const CHROME_CANDIDATES = [
@@ -51,6 +62,7 @@ async function main(): Promise<void> {
     }),
     registry: new RedactionRegistry(),
     binding: new BindingPolicy(),
+    pendingFills: new Map(),
   };
 
   const server = createServer(ctx);

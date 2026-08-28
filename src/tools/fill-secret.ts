@@ -1,8 +1,11 @@
+import { randomUUID } from "node:crypto";
+
 import { z } from "zod";
 
+import { ConsensusNeededError } from "../broker/secrets-client.js";
 import type { FillTarget } from "../broker/types.js";
 import { injectSecret } from "../browser/inject.js";
-import { defineTool } from "./tool.js";
+import { defineTool, type PendingFill } from "./tool.js";
 
 export const fillSecret = defineTool({
   name: "fill_secret",
@@ -45,8 +48,45 @@ export const fillSecret = defineTool({
 
     // 4. TODO: human confirmation (elicitation / MCP App) — later milestone.
 
-    // 5. Export: plaintext lands in broker memory only.
-    const exported = await ctx.secrets.exportSecret(ref);
+    // 5. Export: plaintext lands in broker memory only. A consensus-gated
+    //    export parks the fill instead of failing it: the broker keeps the
+    //    decryption key and the target, hands the agent an opaque fill id,
+    //    and await_fill completes the fill once approvers reach quorum.
+    let exported;
+    try {
+      exported = await ctx.secrets.exportSecret(ref);
+    } catch (err) {
+      if (err instanceof ConsensusNeededError && err.pending) {
+        // Idempotent: re-requesting the same fill returns the same handle
+        // rather than proposing a duplicate export for approvers to sign.
+        const existing = [...ctx.pendingFills.values()].find(
+          (f) =>
+            f.pending.ref.secretId === ref.secretId &&
+            f.elementUid === args.element_uid,
+        );
+        const fill: PendingFill = existing ?? {
+          fillId: randomUUID(),
+          pending: err.pending,
+          elementUid: args.element_uid,
+          pageUrl: target.pageUrl,
+          createdAt: Date.now(),
+        };
+        ctx.pendingFills.set(fill.fillId, fill);
+        return {
+          filled: false,
+          status: "pending_approval",
+          fill_id: fill.fillId,
+          secret_id: ref.secretId,
+          activity_id: fill.pending.activityId,
+          message:
+            "Export requires consensus approval. Ask an approver to approve " +
+            `activity ${fill.pending.activityId} (Turnkey dashboard), then ` +
+            "call await_fill with this fill_id. Keep the page where it is: " +
+            "the fill re-validates the destination before injecting.",
+        };
+      }
+      throw err;
+    }
 
     // 6. Inject via CDP; registers with the redaction registry BEFORE the
     //    value touches the page, then drops the value.

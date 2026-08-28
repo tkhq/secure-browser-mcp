@@ -1,6 +1,6 @@
 # Tool reference
 
-Seven tools. All results are redacted server-side before you see them.
+Eight tools. All results are redacted server-side before you see them.
 
 ## list_secret_refs
 
@@ -49,6 +49,12 @@ Field values are redacted: `[REDACTED:secret-filled-field]` after a fill, `[MASK
 ## fill_secret
 
 `{ secret_id: string, element_uid: string }` → outcome only (no value). Steps performed broker-side: resolve ref → resolve element → enforce binding (origin, URL pattern, selector) → export from Turnkey → inject via CDP → tag field for redaction. Throws a binding-violation error if the live page or element doesn't match the secret's binding; do not retry elsewhere.
+
+When the export needs multi-party approval, returns `{ filled: false, status: "pending_approval", fill_id, activity_id }` instead — see `await_fill`. Calling `fill_secret` again for the same secret and element returns the same `fill_id`.
+
+## await_fill
+
+`{ fill_id: string, timeout_seconds?: number (default 30, max 120) }`. Completes a pending fill once approvers reach quorum: waits up to the timeout, re-validates the destination against the live page, injects. Returns `pending_approval` again if the timeout passes first — the fill stays valid, call again. Fails permanently if the export is rejected, the broker restarted, or the target element left the page.
 
 ## list_network_requests
 
