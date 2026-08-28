@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import { startFixtureServer, FIXTURE_ORIGIN } from "./fixtures/serve.js";
+import { McpStdioClient } from "./mcp-client.js";
 
 /**
  * End-to-end: drive the real MCP server over stdio as a black box, exactly
@@ -10,108 +11,13 @@ import { startFixtureServer, FIXTURE_ORIGIN } from "./fixtures/serve.js";
 
 const DEMO_PLAINTEXT = "mock-demo-p@ssw0rd-1234"; // mock-secrets.ts seed
 
-type JsonRpcMessage = {
-  id?: number;
-  result?: {
-    tools?: { name: string }[];
-    isError?: boolean;
-    content?: { type: string; text: string }[];
-  };
-  error?: { message: string };
-};
-
-class McpStdioClient {
-  private proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
-  private buffer = "";
-  private nextId = 1;
-  private pending = new Map<number, (msg: JsonRpcMessage) => void>();
-  /** Every byte the server ever wrote to stdout, for leak assertions. */
-  transcript = "";
-
-  constructor() {
-    this.proc = Bun.spawn(["bun", "src/index.ts"], {
-      cwd: new URL("..", import.meta.url).pathname,
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env, SBM_HEADLESS: "true" },
-    });
-    void this.readLoop();
-  }
-
-  private async readLoop(): Promise<void> {
-    for await (const chunk of this.proc.stdout) {
-      const text = new TextDecoder().decode(chunk);
-      this.transcript += text;
-      this.buffer += text;
-      let idx: number;
-      while ((idx = this.buffer.indexOf("\n")) >= 0) {
-        const line = this.buffer.slice(0, idx);
-        this.buffer = this.buffer.slice(idx + 1);
-        if (!line.trim()) continue;
-        const msg = JSON.parse(line) as JsonRpcMessage;
-        if (msg.id !== undefined) {
-          this.pending.get(msg.id)?.(msg);
-          this.pending.delete(msg.id);
-        }
-      }
-    }
-  }
-
-  private send(payload: Record<string, unknown>): void {
-    this.proc.stdin.write(JSON.stringify(payload) + "\n");
-  }
-
-  request(
-    method: string,
-    params?: Record<string, unknown>,
-  ): Promise<JsonRpcMessage> {
-    const id = this.nextId++;
-    const done = new Promise<JsonRpcMessage>((resolve, reject) => {
-      this.pending.set(id, resolve);
-      setTimeout(() => reject(new Error(`timeout: ${method}`)), 30_000);
-    });
-    this.send({ jsonrpc: "2.0", id, method, ...(params ? { params } : {}) });
-    return done;
-  }
-
-  notify(method: string): void {
-    this.send({ jsonrpc: "2.0", method });
-  }
-
-  async callTool(
-    name: string,
-    args: Record<string, unknown> = {},
-  ): Promise<{ isError: boolean; body: unknown; text: string }> {
-    const msg = await this.request("tools/call", { name, arguments: args });
-    const text = msg.result?.content?.[0]?.text ?? "";
-    let body: unknown;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      body = text;
-    }
-    return { isError: msg.result?.isError === true, body, text };
-  }
-
-  async stop(): Promise<void> {
-    this.proc.kill();
-    await this.proc.exited;
-  }
-}
-
 let fixture: { stop: () => void };
 let client: McpStdioClient;
 
 beforeAll(async () => {
   fixture = startFixtureServer();
   client = new McpStdioClient();
-  await client.request("initialize", {
-    protocolVersion: "2025-06-18",
-    capabilities: {},
-    clientInfo: { name: "e2e", version: "0" },
-  });
-  client.notify("notifications/initialized");
+  await client.initialize();
 });
 
 afterAll(async () => {
@@ -129,6 +35,7 @@ test("lists the full tool surface, without evaluate_script", async () => {
     "click",
     "type_text",
     "fill_secret",
+    "await_fill",
     "list_network_requests",
   ]);
 });
@@ -193,6 +100,54 @@ test("refuses to fill into a non-matching destination", async () => {
   });
   expect(fill.isError).toBe(true);
   expect(fill.text).toContain("does not match bound origin");
+});
+
+test("fills a JSON card secret into several fields with one call", async () => {
+  const refs = (await client.callTool("list_secret_refs")).body as {
+    refs: { secretId: string; name?: string }[];
+  };
+  const card = refs.refs.find((r) => r.name === "demo-card");
+  expect(card).toBeDefined();
+
+  await client.callTool("navigate", { url: `${FIXTURE_ORIGIN}/checkout` });
+  const snap = (await client.callTool("snapshot")).body as {
+    elements: { uid: string; name?: string }[];
+  };
+  const byName = (name: string) =>
+    snap.elements.find((e) => e.name === name)!.uid;
+
+  // A payload key the binding doesn't declare is refused before any export,
+  // and a declared key aimed at the wrong element fails its selector check.
+  const badKey = await client.callTool("fill_secret", {
+    secret_id: card!.secretId,
+    fields: [{ key: "name", element_uid: byName("cardName") }],
+  });
+  expect(badKey.isError).toBe(true);
+  const wrongElement = await client.callTool("fill_secret", {
+    secret_id: card!.secretId,
+    fields: [{ key: "number", element_uid: byName("cardName") }],
+  });
+  expect(wrongElement.isError).toBe(true);
+
+  const fill = await client.callTool("fill_secret", {
+    secret_id: card!.secretId,
+    fields: [
+      { key: "number", element_uid: byName("cardNumber") },
+      { key: "expiry", element_uid: byName("cardExpiry") },
+      { key: "cvc", element_uid: byName("cardCvc") },
+    ],
+  });
+  expect(fill.isError).toBe(false);
+  expect(fill.body).toMatchObject({ filled: true });
+
+  const snap2 = (await client.callTool("snapshot")).body as {
+    elements: { name?: string; value?: string }[];
+  };
+  for (const name of ["cardNumber", "cardExpiry", "cardCvc"]) {
+    const field = snap2.elements.find((e) => e.name === name);
+    expect(field?.value).toBe("[REDACTED:secret-filled-field]");
+  }
+  expect(client.transcript).not.toContain("4242424242424242");
 });
 
 test("the plaintext never appeared anywhere in server output", () => {

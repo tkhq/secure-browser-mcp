@@ -46,6 +46,9 @@ export class BrowserSession {
       // pipe:true = --remote-debugging-pipe. No TCP debugging port exists,
       // so nothing else on the host can attach a debugger to this browser.
       pipe: true,
+      // Fill the window instead of puppeteer's fixed 800x600 emulation —
+      // headed demos otherwise render in a letterboxed region.
+      defaultViewport: null,
       userDataDir,
       args: [
         "--disable-extensions",

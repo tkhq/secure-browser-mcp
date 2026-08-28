@@ -1,0 +1,219 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Northlake Supply — Checkout</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(
+            1200px 600px at 80% -10%,
+            #1e3a5f 0%,
+            transparent 60%
+          ),
+          radial-gradient(
+            900px 500px at -10% 110%,
+            #14342b 0%,
+            transparent 55%
+          ),
+          #0b1220;
+        color: #e6edf6;
+        padding: 24px;
+      }
+      .card {
+        width: 100%;
+        max-width: 460px;
+        background: rgba(17, 25, 40, 0.85);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 16px;
+        padding: 36px;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 24px;
+      }
+      .brand .mark {
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        background: linear-gradient(135deg, #4f8cff, #2dd4a7);
+        display: grid;
+        place-items: center;
+        font-weight: 800;
+        color: #071018;
+        font-size: 14px;
+      }
+      .brand .name {
+        font-weight: 700;
+        font-size: 15px;
+      }
+      .signedin {
+        margin-left: auto;
+        font-size: 12px;
+        color: #2dd4a7;
+      }
+      h1 {
+        font-size: 21px;
+        font-weight: 650;
+        margin-bottom: 18px;
+      }
+      .item {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+        margin-bottom: 24px;
+        background: rgba(9, 14, 24, 0.5);
+      }
+      .thumb {
+        width: 44px;
+        height: 44px;
+        border-radius: 10px;
+        background: linear-gradient(135deg, #2dd4a7, #4f8cff);
+        display: grid;
+        place-items: center;
+        font-size: 20px;
+      }
+      .item .title {
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .item .meta {
+        font-size: 12px;
+        color: #93a4bc;
+      }
+      .item .price {
+        margin-left: auto;
+        font-weight: 700;
+        font-size: 16px;
+      }
+      label {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        color: #aab8cc;
+        margin: 0 0 6px 2px;
+      }
+      input {
+        width: 100%;
+        padding: 12px 14px;
+        margin-bottom: 16px;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(9, 14, 24, 0.9);
+        color: #e6edf6;
+        font-size: 15px;
+        outline: none;
+        transition: border-color 0.15s;
+      }
+      input:focus {
+        border-color: #4f8cff;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+      button {
+        width: 100%;
+        margin-top: 6px;
+        padding: 13px;
+        border: none;
+        border-radius: 10px;
+        background: linear-gradient(135deg, #2dd4a7, #1eae88);
+        color: #06231b;
+        font-size: 15px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:hover {
+        filter: brightness(1.06);
+      }
+      .footnote {
+        margin-top: 20px;
+        text-align: center;
+        font-size: 12px;
+        color: #6d7f97;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <div class="brand">
+        <div class="mark">N</div>
+        <div class="name">Northlake Supply</div>
+        <div class="signedin">● Signed in</div>
+      </div>
+      <h1>Checkout</h1>
+      <div class="item">
+        <div class="thumb">🔐</div>
+        <div>
+          <div class="title">Field Notes Kit — Demo Edition</div>
+          <div class="meta">Qty 1 · ships never (it's a demo)</div>
+        </div>
+        <div class="price">$9.99</div>
+      </div>
+      <form id="checkout" action="/pay" method="post">
+        <label for="cardName">Name on card</label>
+        <input
+          type="text"
+          id="cardName"
+          name="cardName"
+          autocomplete="cc-name"
+          placeholder="Full name"
+        />
+        <label for="cardNumber">Card number</label>
+        <input
+          type="text"
+          id="cardNumber"
+          name="cardNumber"
+          inputmode="numeric"
+          autocomplete="cc-number"
+          placeholder="1234 5678 9012 3456"
+        />
+        <div class="row">
+          <div>
+            <label for="cardExpiry">Expiry (MMYY)</label>
+            <input
+              type="text"
+              id="cardExpiry"
+              name="cardExpiry"
+              inputmode="numeric"
+              autocomplete="cc-exp"
+              placeholder="MM / YY"
+            />
+          </div>
+          <div>
+            <label for="cardCvc">CVC</label>
+            <input
+              type="password"
+              id="cardCvc"
+              name="cardCvc"
+              inputmode="numeric"
+              autocomplete="cc-csc"
+              placeholder="•••"
+            />
+          </div>
+        </div>
+        <button type="submit">Pay $9.99</button>
+      </form>
+      <div class="footnote">Test environment — nothing is charged.</div>
+    </main>
+  </body>
+</html>
