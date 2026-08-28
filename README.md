@@ -1,96 +1,26 @@
-# secure-browser-mcp
+<img width="1500" height="500" alt="Secure Browser MCP" src="assets/banner.png" />
 
-An MCP server that fills secrets into a browser without showing them to the agent.
+<h4 align="center">
+    Agents that work behind every login.
+</h4>
 
-The agent sees secret references, not secret values. Secrets live in [Turnkey Secrets](https://docs.turnkey.com/features/secrets). The server exports a secret, decrypts it in its own memory, and types it into the page over CDP. The value never enters the conversation, the transcript, or the model context.
+<p align="center">
+  Let an agent log in, check out, and fill any form with credentials it never sees.
+</p>
 
-It covers the secrets that cannot be proxied through an API: passwords, card numbers, and SSNs typed into web forms.
+## Features
 
-**Status: working demo.** The full fill flow runs end to end against a mock secrets backend: browser session, snapshots with stable element uids, destination-binding enforcement, CDP injection, and structural redaction. Not yet implemented: network-request capture, human confirmation, consensus exports, screenshots. See [docs/DESIGN.md](docs/DESIGN.md) for the full design and [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) for what this does and does not defend against.
+- **Fill by reference**: The agent holds an opaque secret reference and cannot read the value. It calls `fill_secret`, and Turnkey injects the plaintext straight into the page over raw CDP
+- **Zero context leakage**: The secret never enters the model context, the transcript, or logs. Every tool result passes through a single redaction choke point, and an end-to-end test asserts no leak over the wire
+- **Destination bindings**: Each secret binds at import to an exact origin, URL pattern, and field selector. A page that talks the agent into filling anywhere else gets a broker-side refusal before any export
+- **Consensus approvals**: Turnkey policies encode allow once, allow always, or require N approvers. Approvers sign the export and still cannot read the value, which only an ephemeral key held by the broker can decrypt
+- **Secure enclave storage**: Credentials live in Turnkey Secret Storage, so no single party can access them alone. That includes Turnkey, and it includes the agent
+- **Cryptographic audit trail**: Every export request, approver, and destination lands as a signed Turnkey activity you can query
+- **Any MCP client**: Point Claude Code, Codex, or any agent framework at the server over stdio
+- **Skill and evals included**: Ships with an Agent Skill that teaches agents the workflow and an eval harness that runs real headless agent sessions and hard-fails any leak
 
-## How it works
+## Overview
 
-1. The agent calls `list_secret_refs` and gets ids, names, and destination bindings. No values.
-2. The agent drives the browser with `navigate`, `snapshot`, `click`, and `type_text`.
-3. The agent calls `fill_secret(secret_id, element_uid)`.
-4. The server checks the page against the secret's destination binding. The binding is set at import time through Turnkey static properties and cannot be changed.
-5. The server exports the secret from Turnkey (ephemeral P-256 key, HPKE), types it into the field over CDP, and drops the value.
-6. Every tool result passes through a redaction layer before it reaches the agent. Snapshots, network logs, and screenshots never echo a filled value.
+Secure Browser MCP is an MCP server that acts as a credential broker and owns its own browser. The agent drives the browser through a small set of tools. Passwords, cards, and API keys stay in Turnkey Secret Storage until a fill passes policy. The broker then exports the secret, decrypts it in its own process memory, and types it into the bound field. The agent sees only `[REDACTED]`.
 
-There is no `evaluate_script` tool. That is a security decision, not a gap.
-
-## Quickstart
-
-```sh
-bun install
-bun run typecheck
-bun test             # end-to-end: fills a secret into a local login page and
-                     # asserts the plaintext never appears in server output
-bun run dev          # starts the MCP server on stdio
-```
-
-Inspect the tool surface:
-
-```sh
-bunx @modelcontextprotocol/inspector bun src/index.ts
-```
-
-Try the demo by hand: run `bun run demo:fixture` to serve a login page at `http://localhost:4173/login`, connect any MCP client, and fill the seeded `demo-login-password` secret into the password field.
-
-The server needs a Chromium-based browser. It checks `SBM_CHROME_PATH` first, then common install locations (Chrome, Chromium, Brave, Edge). Set `SBM_HEADLESS=false` to watch it work.
-
-## Backends
-
-The server uses an in-memory mock backend by default. Set these to use real Turnkey Secrets (closed beta):
-
-```sh
-export TURNKEY_API_PUBLIC_KEY=...
-export TURNKEY_API_PRIVATE_KEY=...
-export TURNKEY_ORGANIZATION_ID=...
-export TURNKEY_API_BASE_URL=https://api.turnkey.com   # optional, this is the default
-```
-
-The Turnkey backend is a thin adapter over `@turnkey/sdk-server` (`importSecret` / `exportSecret` / `getSecrets`, merged in [tkhq/sdk#1479](https://github.com/tkhq/sdk/pull/1479)). For a secret to be fillable, import it with the binding static properties (`sbm:origin`, optional `sbm:url-pattern` and `sbm:selector` — see `src/broker/types.ts`).
-
-For a real-world walkthrough — an agent paying a Stripe test checkout with a card it can never read — see [docs/DEMO-STRIPE.md](docs/DEMO-STRIPE.md).
-
-## Agent Skills
-
-`skills/secure-browser/` ships an [Agent Skill](https://agentskills.io) that teaches agents the fill protocol: secrets are handles, binding rejections are policy, and the quirks that waste turns. Install it:
-
-```sh
-bun run skill:install -- --claude            # ~/.claude/skills/
-bun run skill:install -- --claude --project  # ./.claude/skills/
-bun run skill:install -- --codex             # ~/.codex/skills/
-```
-
-A skill is just a folder — copying `skills/secure-browser/` anywhere a skills-compatible agent looks works too.
-
-## Evals
-
-`evals/` runs a real headless agent (Claude Code today) against the server with the mock backend and grades the transcript: no secret leakage, `fill_secret` used instead of `type_text`, task completed, plus tool-call metrics for spotting regressions across PRs. See [evals/README.md](evals/README.md).
-
-```sh
-bun run eval
-```
-
-## Dependencies on unpublished SDK code
-
-The Secrets API methods are on `tkhq/sdk` main but not on npm yet. The `vendor/` directory holds tarballs packed from a local `../sdk` checkout, pinned through `overrides` in `package.json`. Remove the vendor tarballs and the overrides once `@turnkey/sdk-server@8.3.0` ships.
-
-To regenerate the tarballs:
-
-```sh
-cd ../sdk && pnpm install && pnpm turbo build --filter=@turnkey/sdk-server --filter=@turnkey/crypto
-cd packages/<pkg> && pnpm pack --out ../../../secure-browser-mcp/vendor/turnkey-<pkg>.tgz
-```
-
-## Layout
-
-| Path             | What it holds                                                                                     |
-| ---------------- | ------------------------------------------------------------------------------------------------- |
-| `src/broker/`    | Secret refs, the `SecretsClient` interface, Turnkey and mock backends, destination-binding policy |
-| `src/browser/`   | Browser ownership and CDP secret injection                                                        |
-| `src/redaction/` | The scrub layer every tool result passes through                                                  |
-| `src/tools/`     | One file per MCP tool                                                                             |
-| `docs/`          | Design and threat model                                                                           |
+Ask an agent to buy something. It navigates to checkout, signs in with a stored password under an allow-always policy, then requests the card. The card requires a second approver, so the fill pauses until a human signs off. The payment succeeds, and the card number never appears in any byte the server sent.
