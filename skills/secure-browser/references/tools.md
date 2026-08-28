@@ -48,7 +48,9 @@ Field values are redacted: `[REDACTED:secret-filled-field]` after a fill, `[MASK
 
 ## fill_secret
 
-`{ secret_id: string, element_uid: string }` → outcome only (no value). Steps performed broker-side: resolve ref → resolve element → enforce binding (origin, URL pattern, selector) → export from Turnkey → inject via CDP → tag field for redaction. Throws a binding-violation error if the live page or element doesn't match the secret's binding; do not retry elsewhere.
+`{ secret_id: string, element_uid?: string, fields?: [{key, element_uid}] }` → outcome only (no value). Steps performed broker-side: resolve ref → resolve elements → enforce binding (origin, URL pattern, selector) → export from Turnkey → inject via CDP → tag fields for redaction. Throws a binding-violation error if the live page or an element doesn't match the secret's binding; do not retry elsewhere.
+
+Single-value secrets take `element_uid`. A JSON-payload secret — its binding declares `sbm:fields`, a map from payload key to required selector — takes `fields` instead, filling several inputs in ONE call: one export, one approval. Example: a card secret with keys `number`/`expiry`/`cvc` fills all three checkout fields at once.
 
 When the export needs multi-party approval, returns `{ filled: false, status: "pending_approval", fill_id, activity_id }` instead — see `await_fill`. Calling `fill_secret` again for the same secret and element returns the same `fill_id`.
 

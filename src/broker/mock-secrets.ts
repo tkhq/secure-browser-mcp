@@ -31,6 +31,15 @@ export function parseBinding(
   if (urlPattern) binding.urlPattern = urlPattern;
   const selector = staticProperties[BINDING_KEYS.selector];
   if (selector) binding.selector = selector;
+  const fields = staticProperties[BINDING_KEYS.fields];
+  if (fields) {
+    try {
+      binding.fields = JSON.parse(fields) as Record<string, string>;
+    } catch {
+      // An unparseable fields map means the binding cannot be satisfied;
+      // leave it unset so multi-field fills are refused outright.
+    }
+  }
   return binding;
 }
 
@@ -124,21 +133,27 @@ const DEFAULT_SEED: MockSecret[] = [
       [BINDING_KEYS.selector]: "input[type=password]",
     },
   },
-  // A fake card for the fixture checkout page (Stripe's PUBLIC test values,
-  // docs.stripe.com/testing — safe anywhere). Mirrors the prod demo set.
-  ...[
-    { field: "number", value: "4242424242424242", sel: "cardNumber" },
-    { field: "expiry", value: "1234", sel: "cardExpiry" },
-    { field: "cvc", value: "123", sel: "cardCvc" },
-  ].map(({ field, value, sel }) => ({
-    name: `demo-card-${field}`,
-    value,
+  // A fake card for the fixture checkout page as ONE JSON-payload secret
+  // (Stripe's PUBLIC test values, docs.stripe.com/testing — safe anywhere):
+  // one export and one approval fill all three fields. Mirrors the prod
+  // demo secret.
+  {
+    name: "demo-card",
+    value: JSON.stringify({
+      number: "4242424242424242",
+      expiry: "1234",
+      cvc: "123",
+    }),
     staticProperties: {
       [BINDING_KEYS.origin]: "http://localhost:4173",
       [BINDING_KEYS.urlPattern]: "/checkout*",
-      [BINDING_KEYS.selector]: `input[name=${sel}]`,
+      [BINDING_KEYS.fields]: JSON.stringify({
+        number: "input[name=cardNumber]",
+        expiry: "input[name=cardExpiry]",
+        cvc: "input[name=cardCvc]",
+      }),
     },
-  })),
+  },
   {
     name: "example-login-password",
     value: "mock-hunter2-do-not-use",

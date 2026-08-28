@@ -1,8 +1,7 @@
 import { z } from "zod";
 
 import { ConsensusPendingError } from "../broker/secrets-client.js";
-import type { FillTarget } from "../broker/types.js";
-import { injectSecret } from "../browser/inject.js";
+import { injectResolved, validateTargets } from "./fill-common.js";
 import { defineTool } from "./tool.js";
 
 export const awaitFill = defineTool({
@@ -51,45 +50,29 @@ export const awaitFill = defineTool({
     }
     ctx.pendingFills.delete(fill.fillId);
 
-    // Approval took wall-clock time; the page may have moved. Re-resolve the
-    // element and re-check the binding against the live page before the
-    // plaintext goes anywhere. If the target is gone, the value is dropped —
-    // never redirected to a "close enough" field.
-    const page = await ctx.session.ensureStarted();
-    let element;
+    // Approval took wall-clock time; the page may have moved. Re-resolve
+    // every element and re-check the binding against the live page before
+    // the plaintext goes anywhere. If a target is gone, the value is dropped
+    // — never redirected to a "close enough" field.
+    let resolved;
     try {
-      element = ctx.session.resolveElement(fill.elementUid);
-    } catch {
-      exported.release();
-      throw new Error(
-        "The target element is no longer available (the page changed while " +
-          "awaiting approval). Snapshot again and start a new fill_secret.",
-      );
-    }
-    const selectorInfo = await element.handle.evaluate((el) => {
-      const input = el as HTMLInputElement;
-      return `${el.tagName.toLowerCase()}${input.type ? `[type=${input.type}]` : ""}`;
-    });
-    const target: FillTarget = {
-      pageUrl: page.url(),
-      elementUid: fill.elementUid,
-      selectorInfo,
-    };
-    try {
-      await ctx.binding.assertAllowed(ref, target, {
-        elementMatches: (selector) =>
-          element.handle.evaluate((el, sel) => el.matches(sel), selector),
-      });
+      resolved = await validateTargets(ctx, ref, fill.targets);
     } catch (err) {
       exported.release();
+      if (err instanceof Error && /Unknown element uid/i.test(err.message)) {
+        throw new Error(
+          "A target element is no longer available (the page changed while " +
+            "awaiting approval). Snapshot again and start a new fill_secret.",
+        );
+      }
       throw err;
     }
 
-    await injectSecret(ctx.session, target, exported, ctx.registry);
+    await injectResolved(ctx, exported, resolved);
     return {
       filled: true,
       secret_id: ref.secretId,
-      element_uid: target.elementUid,
+      element_uids: fill.targets.map((t) => t.elementUid),
     };
   },
 });

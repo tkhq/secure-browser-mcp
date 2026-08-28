@@ -19,6 +19,13 @@ export const BINDING_KEYS = {
   urlPattern: "sbm:url-pattern",
   /** Optional. CSS selector the target field must match, e.g. "input[type=password]". */
   selector: "sbm:selector",
+  /**
+   * Optional. For secrets whose value is a JSON object filled into several
+   * fields under ONE export (one approval): a JSON-encoded map from payload
+   * key to the CSS selector its field must match, e.g.
+   * `{"number":"input[name=cardNumber]","cvc":"input[name=cardCvc]"}`.
+   */
+  fields: "sbm:fields",
 } as const;
 
 /** Destination binding parsed out of a secret's static properties. */
@@ -26,6 +33,8 @@ export type SecretBinding = {
   origin: string;
   urlPattern?: string;
   selector?: string;
+  /** Per-payload-key selectors for JSON multi-field secrets. */
+  fields?: Record<string, string>;
 };
 
 /**

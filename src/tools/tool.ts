@@ -7,13 +7,15 @@ import type { RedactionRegistry } from "../redaction/registry.js";
 
 /**
  * A fill_secret call parked on consensus approval. Broker memory only — the
- * agent holds just the fillId. The original target is retained so the fill
+ * agent holds just the fillId. The original targets are retained so the fill
  * can be re-validated against the live page once approvals land.
  */
 export type PendingFill = {
   fillId: string;
   pending: PendingExport;
-  elementUid: string;
+  /** Requested destinations: element uids, with payload keys for JSON
+   * multi-field secrets. */
+  targets: { key?: string; elementUid: string }[];
   pageUrl: string;
   createdAt: number;
 };

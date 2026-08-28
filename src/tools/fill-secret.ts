@@ -3,8 +3,11 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import { ConsensusNeededError } from "../broker/secrets-client.js";
-import type { FillTarget } from "../broker/types.js";
-import { injectSecret } from "../browser/inject.js";
+import {
+  injectResolved,
+  validateTargets,
+  type FillFieldSpec,
+} from "./fill-common.js";
 import { defineTool, type PendingFill } from "./tool.js";
 
 function pendingResult(fill: PendingFill) {
@@ -22,18 +25,41 @@ function pendingResult(fill: PendingFill) {
   };
 }
 
+function specsKey(secretId: string, specs: FillFieldSpec[]): string {
+  const parts = specs.map((s) => `${s.key ?? ""}:${s.elementUid}`).sort();
+  return `${secretId}|${parts.join(",")}`;
+}
+
 export const fillSecret = defineTool({
   name: "fill_secret",
   description:
-    "Fill a secret into a form field, by reference. The secret value is " +
+    "Fill a secret into form fields, by reference. The secret value is " +
     "exported from Turnkey, injected via CDP, and never enters this " +
     "conversation. Fails unless the current page matches the secret's " +
-    "destination binding.",
+    "destination binding. Single-value secrets fill one element_uid; a " +
+    "JSON-payload secret (binding declares sbm:fields) fills several fields " +
+    "in one call — one export, one approval.",
   inputSchema: {
     secret_id: z.string().describe("secretId from list_secret_refs"),
     element_uid: z
       .string()
-      .describe("Element uid of the target field, from the latest snapshot"),
+      .optional()
+      .describe(
+        "Element uid of the target field (single-value secrets), from the " +
+          "latest snapshot",
+      ),
+    fields: z
+      .array(
+        z.object({
+          key: z.string().describe("Payload key from the binding's sbm:fields"),
+          element_uid: z.string().describe("Target element uid"),
+        }),
+      )
+      .optional()
+      .describe(
+        "For JSON-payload secrets: which payload key goes into which " +
+          "element. Provide instead of element_uid.",
+      ),
   },
   handler: async (ctx, args) => {
     // 1. Resolve the ref.
@@ -41,25 +67,17 @@ export const fillSecret = defineTool({
     const ref = refs.find((r) => r.secretId === args.secret_id);
     if (!ref) throw new Error(`Unknown secret: ${args.secret_id}`);
 
-    // 2. Resolve the target element on the live page.
-    const page = await ctx.session.ensureStarted();
-    const element = ctx.session.resolveElement(args.element_uid);
-    const selectorInfo = await element.handle.evaluate((el) => {
-      const input = el as HTMLInputElement;
-      return `${el.tagName.toLowerCase()}${input.type ? `[type=${input.type}]` : ""}`;
-    });
-    const target: FillTarget = {
-      pageUrl: page.url(),
-      elementUid: args.element_uid,
-      selectorInfo,
-    };
+    // 2. Normalize the requested destinations.
+    if (!args.element_uid === !args.fields) {
+      throw new Error("Provide exactly one of element_uid or fields");
+    }
+    const specs: FillFieldSpec[] = args.fields
+      ? args.fields.map((f) => ({ key: f.key, elementUid: f.element_uid }))
+      : [{ elementUid: args.element_uid! }];
 
-    // 3. Prompt-injection gate: the live page must match the binding baked
-    //    into the secret's static properties at import time.
-    await ctx.binding.assertAllowed(ref, target, {
-      elementMatches: (selector) =>
-        element.handle.evaluate((el, sel) => el.matches(sel), selector),
-    });
+    // 3. Prompt-injection gate: the live page and every element must match
+    //    the binding baked into the secret's static properties at import.
+    const resolved = await validateTargets(ctx, ref, specs);
 
     // 4. TODO: human confirmation (elicitation / MCP App) — later milestone.
 
@@ -68,16 +86,15 @@ export const fillSecret = defineTool({
     //    after the export would submit a duplicate proposal every retry.
     //    (If the parked activity was meanwhile rejected, await_fill reports
     //    that and clears the entry, and the next fill_secret starts fresh.)
+    const requestKey = specsKey(ref.secretId, specs);
     const existing = [...ctx.pendingFills.values()].find(
-      (f) =>
-        f.pending.ref.secretId === ref.secretId &&
-        f.elementUid === args.element_uid,
+      (f) => specsKey(f.pending.ref.secretId, f.targets) === requestKey,
     );
     if (existing) return pendingResult(existing);
 
     // 6. Export: plaintext lands in broker memory only. A consensus-gated
     //    export parks the fill instead of failing it: the broker keeps the
-    //    decryption key and the target, hands the agent an opaque fill id,
+    //    decryption key and the targets, hands the agent an opaque fill id,
     //    and await_fill completes the fill once approvers reach quorum.
     let exported;
     try {
@@ -87,8 +104,8 @@ export const fillSecret = defineTool({
         const fill: PendingFill = {
           fillId: randomUUID(),
           pending: err.pending,
-          elementUid: args.element_uid,
-          pageUrl: target.pageUrl,
+          targets: specs,
+          pageUrl: resolved[0]!.target.pageUrl,
           createdAt: Date.now(),
         };
         ctx.pendingFills.set(fill.fillId, fill);
@@ -97,15 +114,15 @@ export const fillSecret = defineTool({
       throw err;
     }
 
-    // 6. Inject via CDP; registers with the redaction registry BEFORE the
-    //    value touches the page, then drops the value.
-    await injectSecret(ctx.session, target, exported, ctx.registry);
+    // 7. Inject via CDP; each part registers with the redaction registry
+    //    BEFORE the value touches the page, then the value is dropped.
+    await injectResolved(ctx, exported, resolved);
 
     // Outcome only — never the value.
     return {
       filled: true,
       secret_id: ref.secretId,
-      element_uid: target.elementUid,
+      element_uids: specs.map((s) => s.elementUid),
     };
   },
 });
