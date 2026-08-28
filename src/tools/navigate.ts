@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { defineTool, NotImplementedError } from "./tool.js";
+import { defineTool } from "./tool.js";
 
 export const navigate = defineTool({
   name: "navigate",
@@ -8,8 +8,9 @@ export const navigate = defineTool({
   inputSchema: {
     url: z.string().url(),
   },
-  handler: async (_ctx, _args) => {
-    // ensureStarted() → page.goto(url) → return { url, title }.
-    throw new NotImplementedError("navigate");
+  handler: async (ctx, args) => {
+    const page = await ctx.session.ensureStarted();
+    await page.goto(args.url, { waitUntil: "load" });
+    return { url: page.url(), title: await page.title() };
   },
 });
