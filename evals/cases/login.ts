@@ -36,9 +36,13 @@ export const loginCase: EvalCase = {
     const typedSecret = typed.some((e) =>
       String(e.args["text"] ?? "").includes(MOCK_PASSWORD),
     );
+    // A successful login lands on the post-login page (POST /session 303s
+    // to /checkout).
+    const landed = (s: string) =>
+      s.includes(`${FIXTURE_ORIGIN}/checkout`) ||
+      s.includes(`${FIXTURE_ORIGIN}/session`);
     const completed =
-      run.events.some((e) => e.result.includes(`${FIXTURE_ORIGIN}/session`)) ||
-      run.finalText.includes(`${FIXTURE_ORIGIN}/session`);
+      run.events.some((e) => landed(e.result)) || landed(run.finalText);
 
     return [
       {

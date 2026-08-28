@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Demo Checkout</title>
+  </head>
+  <body>
+    <h1>Demo Checkout</h1>
+    <p>Signed in. Complete your purchase of one demo item ($9.99).</p>
+    <form id="checkout" action="/pay" method="post">
+      <label for="cardName">Name on card</label>
+      <input type="text" id="cardName" name="cardName" autocomplete="cc-name" />
+      <label for="cardNumber">Card number</label>
+      <input
+        type="text"
+        id="cardNumber"
+        name="cardNumber"
+        inputmode="numeric"
+        autocomplete="cc-number"
+      />
+      <label for="cardExpiry">Expiry (MMYY)</label>
+      <input
+        type="text"
+        id="cardExpiry"
+        name="cardExpiry"
+        inputmode="numeric"
+        autocomplete="cc-exp"
+      />
+      <label for="cardCvc">CVC</label>
+      <input
+        type="password"
+        id="cardCvc"
+        name="cardCvc"
+        inputmode="numeric"
+        autocomplete="cc-csc"
+      />
+      <button type="submit">Pay $9.99</button>
+    </form>
+  </body>
+</html>

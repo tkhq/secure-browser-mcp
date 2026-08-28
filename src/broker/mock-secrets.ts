@@ -124,6 +124,21 @@ const DEFAULT_SEED: MockSecret[] = [
       [BINDING_KEYS.selector]: "input[type=password]",
     },
   },
+  // A fake card for the fixture checkout page (Stripe's PUBLIC test values,
+  // docs.stripe.com/testing — safe anywhere). Mirrors the prod demo set.
+  ...[
+    { field: "number", value: "4242424242424242", sel: "cardNumber" },
+    { field: "expiry", value: "1234", sel: "cardExpiry" },
+    { field: "cvc", value: "123", sel: "cardCvc" },
+  ].map(({ field, value, sel }) => ({
+    name: `demo-card-${field}`,
+    value,
+    staticProperties: {
+      [BINDING_KEYS.origin]: "http://localhost:4173",
+      [BINDING_KEYS.urlPattern]: "/checkout*",
+      [BINDING_KEYS.selector]: `input[name=${sel}]`,
+    },
+  })),
   {
     name: "example-login-password",
     value: "mock-hunter2-do-not-use",
