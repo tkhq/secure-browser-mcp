@@ -84,10 +84,3 @@ For a real-world walkthrough — an agent paying a Stripe test checkout with a c
 | `src/tools/`     | One file per MCP tool                                                                             |
 | `test/fixtures/` | The demo storefront (login, checkout, receipt)                                                    |
 | `docs/`          | Design, threat model, Stripe demo walkthrough                                                     |
-
-The Secrets API methods are on `tkhq/sdk` main but not on npm yet, so `vendor/` holds tarballs packed from a local `../sdk` checkout, pinned through `overrides` in `package.json`. Drop them once `@turnkey/sdk-server@8.3.0` ships. To regenerate:
-
-```sh
-cd ../sdk && pnpm install && pnpm turbo build --filter=@turnkey/sdk-server --filter=@turnkey/crypto
-cd packages/<pkg> && pnpm pack --out ../../../secure-browser-mcp/vendor/turnkey-<pkg>.tgz
-```
