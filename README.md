@@ -60,6 +60,8 @@ export TURNKEY_API_PRIVATE_KEY=...
 export TURNKEY_ORGANIZATION_ID=...
 ```
 
+To import your own credential, use `bun run scripts/import-secret.ts --help` and follow the [generic import walkthrough](docs/HERMES.md#import-your-own-secret). `list_secret_refs` reports the active `backend` alongside references. Cross-origin iframe inputs (including embedded Stripe Elements) are currently unsupported; verify the broker can see your target fields before importing.
+
 A secret is fillable when it is imported with binding static properties: `sbm:origin` (required), `sbm:url-pattern`, `sbm:selector`, or `sbm:fields` for JSON payloads — see `src/broker/types.ts`. Bindings are immutable after import.
 
 To require approval for exports, add a Turnkey policy whose consensus names both the broker user (its submission is the first vote) and the approver:

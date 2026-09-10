@@ -15,7 +15,10 @@ import { createServer } from "./server.js";
 // SBM_MOCK_CONSENSUS (comma-separated secret names) makes those mock secrets
 // consensus-gated, with approval arriving SBM_MOCK_CONSENSUS_DELAY_MS after
 // the first export attempt — enough to exercise the pending → await flow.
-function makeSecretsClient(): { client: SecretsClient; backend: string } {
+function makeSecretsClient(): {
+  client: SecretsClient;
+  backend: "mock" | "turnkey";
+} {
   const apiClient = turnkeyClientFromEnv();
   if (apiClient) {
     return { client: new TurnkeySecretsClient(apiClient), backend: "turnkey" };
@@ -56,6 +59,7 @@ async function main(): Promise<void> {
   const { client: secrets, backend } = makeSecretsClient();
   const ctx = {
     secrets,
+    backend,
     session: new BrowserSession({
       executablePath: findChrome(),
       headless: process.env["SBM_HEADLESS"] !== "false",

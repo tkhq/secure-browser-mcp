@@ -23,6 +23,7 @@ export type PendingFill = {
 /** Shared wiring every tool handler receives. */
 export type ToolContext = {
   secrets: SecretsClient;
+  backend: "mock" | "turnkey";
   session: BrowserSession;
   registry: RedactionRegistry;
   binding: BindingPolicy;

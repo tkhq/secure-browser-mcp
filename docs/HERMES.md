@@ -50,7 +50,7 @@ Send this first:
 
 > Load the secure-browser skill. Use the secure-browser MCP server to list secret references. Report their names and destination bindings, without trying to read their values.
 
-You should see `demo-login-password` bound to `http://localhost:4173/login*` and `demo-card` bound to `http://localhost:4173/checkout*`, plus two example references. If these are missing, resolve the connection or backend issue before continuing.
+The response should report `backend: "mock"`. You should see `demo-login-password` bound to `http://localhost:4173/login*` and `demo-card` bound to `http://localhost:4173/checkout*`, plus two example references. If these are missing, resolve the connection or backend issue before continuing.
 
 ## 4. Complete a login and checkout
 
@@ -75,25 +75,68 @@ The card fill should return `pending_approval`; Hermes should keep the page in p
 
 The local demo proves the connection and fill protocol. For a real backend, you need a Turnkey organization with Secrets enabled and a broker API identity permitted to list and export the intended secrets.
 
-1. Follow [the Turnkey test-checkout walkthrough](DEMO-STRIPE.md) to configure the broker credentials, import bound test secrets, and create a test checkout link. Run provisioning commands yourself, outside the agent conversation.
+Before importing, navigate to the target page and verify that the broker snapshot includes the intended fields. **Cross-origin iframe fields are unsupported**, including Stripe Elements embedded in merchant pages. The hosted Stripe test-checkout walkthrough is a supported example; embedded card inputs such as those reported on OpenRouter are not. Missing fields can also be hidden behind a tab or accordion: expand it and snapshot again before concluding the page uses an unsupported iframe.
+
+Bindings are immutable after import, and the current tooling has no secret deletion workflow. Verify the exact origin, pathname pattern, and CSS selector on the live page first. A wrong binding requires a new import, preferably under a distinct name so users can identify the corrected reference.
+
+1. Configure the broker credentials and import your credential using [Import your own secret](#import-your-own-secret) below. For a public test-card example, use [the Turnkey test-checkout walkthrough](DEMO-STRIPE.md). Run provisioning yourself, outside the agent conversation.
 2. Remove the three empty `TURNKEY_*` overrides from the Hermes MCP entry, along with any `SBM_MOCK_*` settings. Supply `TURNKEY_API_PUBLIC_KEY`, `TURNKEY_API_PRIVATE_KEY`, and `TURNKEY_ORGANIZATION_ID` to the broker process through your runtime's environment configuration. All three must be present: the current server falls back to mock if any is missing. Do not paste private keys or secret values into chat.
-3. Restart Hermes from the configured environment. Ask it to list secret references again and confirm the imported names and intended bindings. Server startup diagnostics should say `backend: turnkey`. If the demo references remain, check how your Hermes launch process supplies environment variables.
+3. Restart Hermes from the configured environment. Ask it to call `list_secret_refs` and confirm `backend: "turnkey"`, the imported names, and the intended bindings. If it reports `mock`, check how your Hermes launch process supplies environment variables. Startup diagnostics are also available in the active Hermes home’s `logs/mcp-stderr.log` (normally `~/.hermes/logs/mcp-stderr.log`).
 4. Ask Hermes to fill the matching test checkout using those references. A pending export requires the approver to sign the indicated Turnkey activity before `await_fill` can complete. The [README](../README.md#backends) explains the consensus policy.
 
 Keep broker API keys separate from the website credentials stored in Turnkey. Protect the broker's runtime environment from agent shell/file access; browser-tool redaction does not protect keys an agent can read directly from the host. Review the [threat model](THREAT-MODEL.md) before using real credentials.
 
+### Import your own secret
+
+From this checkout, run the importer in your own interactive terminal with all three Turnkey credential variables configured. Load the value into an environment variable through your secret manager or a hidden prompt. Never type a literal secret into an `export` command, pass it as an argument, or paste it into chat.
+
+For a single-line password in Bash or Zsh, this hidden prompt avoids placing the value in shell history:
+
+```sh
+printf 'Secret value (hidden): '
+read -rs SBM_IMPORT_VALUE
+printf '\n'
+export SBM_IMPORT_VALUE
+bun run scripts/import-secret.ts \
+  --name example-login-password \
+  --origin https://example.com \
+  --url-pattern '/login*' \
+  --selector 'input[type=password]' \
+  --value-env SBM_IMPORT_VALUE
+unset SBM_IMPORT_VALUE
+```
+
+Replace the example metadata with the destination you verified. `--value-env` names the variable; it does not contain the value. The importer shows the name and bindings, requires you to type `import`, and returns the `secretId` and committed bindings. It refuses missing Turnkey credentials and noninteractive execution. Cancellation creates nothing. If the API reports a failure, check existing secrets before retrying because the request may have reached Turnkey.
+
+For one JSON secret filling several fields, use `--fields` instead of `--selector`:
+
+```sh
+bun run scripts/import-secret.ts \
+  --name example-card \
+  --origin https://example.com \
+  --url-pattern '/checkout*' \
+  --fields '{"number":"input[name=cardNumber]","expiry":"input[name=cardExpiry]","cvc":"input[name=cardCvc]"}' \
+  --value-env SBM_IMPORT_VALUE
+```
+
+Populate the variable securely with a JSON object containing exactly those keys, each with a nonempty string value. The importer validates the shape but cannot verify CSS selectors against a live page. It writes `sbm:origin`, optional `sbm:url-pattern`, and either `sbm:selector` or `sbm:fields` as static properties. Environment variables remain accessible to processes with sufficient host access; use a terminal outside the agent runtime and unset the value afterward.
+
+After updating this checkout, refresh an existing Hermes skill with `bun run skill:install -- --hermes --force`, using the same `HERMES_HOME` as your profile. This replaces the installed skill copy, including local edits.
+
 ## Troubleshooting
 
-| Symptom                           | Next step                                                                                                                                     |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| No secure-browser tools           | Check the active profile's config and YAML indentation, then restart Hermes. Confirm the generated Bun and checkout paths still exist.        |
-| Skill is missing                  | Install it into the same Hermes home/profile used for chat. The skill and MCP connection are separate setup steps.                            |
-| No Chromium-based browser found   | Install a supported browser or set `SBM_CHROME_PATH` to its executable on the Hermes host.                                                    |
-| Browser fails on a remote machine | Keep `SBM_HEADLESS: "true"` and check the host's Chromium installation and required system libraries.                                         |
-| Navigation fails                  | Keep `bun run demo:fixture` running on the Hermes host. Use `/login`; the fixture root `/` returns 404.                                       |
-| Port 4173 is occupied             | Stop your previous fixture process. Changing the port also requires changing secret bindings.                                                 |
-| Binding refusal                   | Check the secret's origin, URL pattern, and selector. Do not bypass the refusal or send the value through `type_text`.                        |
-| Approval stays pending            | Mock mode: check the delay setting. Turnkey mode: have the designated approver check the activity and policy. Keep the target page unchanged. |
-| Agent uses another browser        | Explicitly load the secure-browser skill and request this MCP server's tools; browser sessions are separate.                                  |
+| Symptom                                     | Next step                                                                                                                                                       |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No secret reference for the target site     | Call `list_secret_refs` and check `backend`. Mock contains fixed demo seeds; switch to Turnkey and use the importer above. The MCP tools cannot import secrets. |
+| Card/password fields absent from `snapshot` | Expand any hidden form controls and snapshot again. Cross-origin iframe fields are unsupported; importing another secret cannot make them reachable.            |
+| No secure-browser tools                     | Check the active profile's config and YAML indentation, then restart Hermes. Confirm the generated Bun and checkout paths still exist.                          |
+| Skill is missing                            | Install it into the same Hermes home/profile used for chat. The skill and MCP connection are separate setup steps.                                              |
+| No Chromium-based browser found             | Install a supported browser or set `SBM_CHROME_PATH` to its executable on the Hermes host.                                                                      |
+| Browser fails on a remote machine           | Keep `SBM_HEADLESS: "true"` and check the host's Chromium installation and required system libraries.                                                           |
+| Navigation fails                            | Keep `bun run demo:fixture` running on the Hermes host. Use `/login`; the fixture root `/` returns 404.                                                         |
+| Port 4173 is occupied                       | Stop your previous fixture process. Changing the port also requires changing secret bindings.                                                                   |
+| Binding refusal                             | Check the secret's origin, URL pattern, and selector. Do not bypass the refusal or send the value through `type_text`.                                          |
+| Approval stays pending                      | Mock mode: check the delay setting. Turnkey mode: have the designated approver check the activity and policy. Keep the target page unchanged.                   |
+| Agent uses another browser                  | Explicitly load the secure-browser skill and request this MCP server's tools; browser sessions are separate.                                                    |
 
 When finished, exit Hermes and stop the fixture with Ctrl-C. To disconnect permanently, remove the `secure-browser` MCP entry and its installed skill folder from the active Hermes home.

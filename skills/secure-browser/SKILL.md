@@ -16,6 +16,18 @@ The secure-browser MCP server is a credential broker that owns a browser. You dr
 - Never ask the user to paste a secret value into the conversation. If a needed secret is missing from `list_secret_refs`, tell the user to import it into their store; pasting it would defeat the point.
 - Everything the server returns is redacted. Fields you filled show `[REDACTED:secret-filled-field]`; password fields show `[MASKED:password-field]`. This is expected, not an error.
 
+## Missing secrets and backend selection
+
+`list_secret_refs` returns `backend: "mock" | "turnkey"` along with `refs`. Check it before advising an import. Mock is the default and contains fixed demo seeds; importing into Turnkey will not change mock results. Turnkey is selected only when all three broker environment variables (`TURNKEY_API_PUBLIC_KEY`, `TURNKEY_API_PRIVATE_KEY`, `TURNKEY_ORGANIZATION_ID`) are nonempty. Ask the user to configure the broker environment and restart it when needed; never request private keys in chat.
+
+For a missing Turnkey reference, direct the user to run `scripts/import-secret.ts --help` from their secure-browser-mcp checkout in their own terminal. It takes name, origin, optional pathname pattern, selector or fields, and `--value-env` naming an environment variable containing the value. It requires confirmation and prints only metadata. Do not read or collect the secret yourself.
+
+Import creates immutable static properties: `sbm:origin` is the exact page origin, `sbm:url-pattern` narrows the pathname, `sbm:selector` restricts a single field, and `sbm:fields` maps JSON payload keys to CSS selectors. Verify the live destination before import. There is no deletion workflow in the current tooling; correcting a binding requires a new import.
+
+## Supported fields
+
+Snapshots and fills target the main frame only. Cross-origin iframe inputs, including embedded Stripe Elements card fields, are unsupported. Expand hidden form controls and snapshot again; if the inputs live in an iframe, explain the limitation and stop that fill. Do not suggest weakening bindings, importing again, or using another browser to extract the value. Hosted Stripe checkout is the documented test surface; it does not imply support for embedded checkout forms.
+
 ## Standard flow
 
 1. `list_secret_refs` — see what secrets exist. Match one to the task by `name` and by `binding.origin` against the site you're targeting.
