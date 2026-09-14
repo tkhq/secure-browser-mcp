@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Setup · Secure Browser MCP</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <div class="shell nav">
+        <a class="brand" href="index.html">secure<span>browser</span> mcp</a>
+        <nav>
+          <a href="index.html">Overview</a
+          ><a aria-current="page" href="setup.html">Setup</a
+          ><a href="docs.html">Docs</a><a href="reference.html">Reference</a>
+        </nav>
+      </div>
+    </header>
+    <main class="shell doc">
+      <div class="eyebrow">Getting started</div>
+      <h1>Set up Secure Browser MCP</h1>
+      <p class="lede">
+        Install the server, connect it to an MCP client, and try the local
+        storefront. This follows the same short, runnable path as the project's
+        code-storage-style guides: prerequisites, one command at a time, then a
+        verification step.
+      </p>
+      <h2>Prerequisites</h2>
+      <ul>
+        <li><a href="https://bun.sh">Bun</a> installed.</li>
+        <li>
+          A Chromium-based browser. The server checks
+          <code>SBM_CHROME_PATH</code> first, then common Chrome, Chromium,
+          Brave, and Edge locations.
+        </li>
+        <li>
+          For production secrets: Turnkey Secrets access and API credentials.
+          The mock backend works without them.
+        </li>
+      </ul>
+      <h2>1. Install and verify</h2>
+      <pre><code>git clone https://github.com/tkhq/secure-browser-mcp.git
+cd secure-browser-mcp
+bun install
+bun test
+</code></pre>
+      <p>
+        The test suite drives a local storefront and asserts that plaintext does
+        not reach server output.
+      </p>
+      <h2>2. Add the MCP server</h2>
+      <p>Claude Code can launch the server directly over stdio:</p>
+      <pre><code>claude mcp add secure-browser -- bun run /path/to/secure-browser-mcp/src/index.ts
+bun run skill:install -- --claude
+</code></pre>
+      <p>
+        Use <code>--codex</code> instead to install the bundled skill for Codex.
+        The server itself works with any MCP client that supports stdio.
+      </p>
+      <h2>3. Try the fixture</h2>
+      <pre><code>bun run demo:fixture
+# In a second terminal:
+bun run dev
+</code></pre>
+      <p>
+        Open the fixture at <code>http://localhost:4173</code>. It includes a
+        login route and a checkout route with seeded mock secrets.
+      </p>
+      <h2>4. Use Turnkey Secrets</h2>
+      <p>Set the following environment variables before starting the server:</p>
+      <pre><code>export TURNKEY_API_PUBLIC_KEY=...
+export TURNKEY_API_PRIVATE_KEY=...
+export TURNKEY_ORGANIZATION_ID=...
+</code></pre>
+      <p class="note">
+        Keep API credentials outside your MCP configuration and transcripts. A
+        secret becomes fillable only after it has an immutable destination
+        binding.
+      </p>
+      <h2>Next</h2>
+      <p>
+        Read <a href="docs.html">the workflow guide</a> for normal agent use, or
+        review every MCP operation in the
+        <a href="reference.html">reference</a>.
+      </p>
+    </main>
+    <footer>
+      <div class="shell">
+        Secure Browser MCP · <a href="setup.md">Markdown</a>
+      </div>
+    </footer>
+  </body>
+</html>

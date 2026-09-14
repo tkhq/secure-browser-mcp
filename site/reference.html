@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Reference · Secure Browser MCP</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <div class="shell nav">
+        <a class="brand" href="index.html">secure<span>browser</span> mcp</a>
+        <nav>
+          <a href="index.html">Overview</a><a href="setup.html">Setup</a
+          ><a href="docs.html">Docs</a
+          ><a aria-current="page" href="reference.html">Reference</a>
+        </nav>
+      </div>
+    </header>
+    <main class="shell doc">
+      <div class="eyebrow">Reference</div>
+      <h1>MCP operations</h1>
+      <p class="lede">
+        The tool surface is intentionally small. All results pass through the
+        server's redaction layer.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Operation</th>
+            <th>Input</th>
+            <th>Result / behavior</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>list_secret_refs</code></td>
+            <td>None</td>
+            <td>
+              Opaque IDs, names, and destination bindings. Never returns secret
+              values.
+            </td>
+          </tr>
+          <tr>
+            <td><code>navigate</code></td>
+            <td><code>url</code></td>
+            <td>
+              Navigates the broker-owned browser and returns its final URL and
+              title.
+            </td>
+          </tr>
+          <tr>
+            <td><code>snapshot</code></td>
+            <td>None</td>
+            <td>
+              Returns interactive elements with IDs for subsequent
+              click/type/fill operations. Filled values are redacted.
+            </td>
+          </tr>
+          <tr>
+            <td><code>click</code></td>
+            <td><code>element_uid</code></td>
+            <td>Clicks an element from the most recent snapshot.</td>
+          </tr>
+          <tr>
+            <td><code>type_text</code></td>
+            <td><code>element_uid</code>, <code>text</code></td>
+            <td>
+              Types visible, non-secret text. Never use it for a credential.
+            </td>
+          </tr>
+          <tr>
+            <td><code>fill_secret</code></td>
+            <td>
+              <code>secret_id</code> plus <code>element_uid</code>, or
+              <code>fields</code>
+            </td>
+            <td>
+              Checks the binding, requests export, then injects via CDP. May
+              return <code>pending_approval</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>await_fill</code></td>
+            <td>
+              <code>fill_id</code>, optional
+              <code>timeout_seconds</code> (1–120)
+            </td>
+            <td>
+              Waits for approval, revalidates the target, and completes the
+              pending fill; it can remain pending.
+            </td>
+          </tr>
+          <tr>
+            <td><code>list_network_requests</code></td>
+            <td>None</td>
+            <td>
+              Reserved scaffold; currently returns <code>not_implemented</code>.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <h2>Fill shapes</h2>
+      <h3>Single field</h3>
+      <pre><code>{ "secret_id": "secret_123", "element_uid": "input_4" }
+</code></pre>
+      <h3>Multi-field JSON payload</h3>
+      <pre><code>{
+  "secret_id": "card_123",
+  "fields": [
+    { "key": "number", "element_uid": "input_4" },
+    { "key": "expiry", "element_uid": "input_5" },
+    { "key": "cvc", "element_uid": "input_6" }
+  ]
+}
+</code></pre>
+      <p>
+        Each payload key must be declared in the secret's
+        <code>sbm:fields</code> binding. The multi-field call uses one export
+        and, when configured, one approval.
+      </p>
+      <h2>Configuration</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Variable</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>SBM_CHROME_PATH</code></td>
+            <td>Optional explicit path to a Chromium-based browser.</td>
+          </tr>
+          <tr>
+            <td><code>SBM_HEADLESS=false</code></td>
+            <td>Shows the broker-owned browser instead of running headless.</td>
+          </tr>
+          <tr>
+            <td><code>TURNKEY_API_PUBLIC_KEY</code></td>
+            <td>Turnkey API public key for the real Secrets backend.</td>
+          </tr>
+          <tr>
+            <td><code>TURNKEY_API_PRIVATE_KEY</code></td>
+            <td>Turnkey API private key for the real Secrets backend.</td>
+          </tr>
+          <tr>
+            <td><code>TURNKEY_ORGANIZATION_ID</code></td>
+            <td>Turnkey organization containing the secrets.</td>
+          </tr>
+        </tbody>
+      </table>
+    </main>
+    <footer>
+      <div class="shell">
+        Secure Browser MCP · <a href="reference.md">Markdown</a>
+      </div>
+    </footer>
+  </body>
+</html>
