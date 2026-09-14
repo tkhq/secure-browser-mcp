@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://tkhq.github.io/secure-browser-mcp/sitemap.xml
