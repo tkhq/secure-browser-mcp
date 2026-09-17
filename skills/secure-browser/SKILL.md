@@ -40,9 +40,9 @@ Snapshots and fills target the main frame only. Cross-origin iframe inputs, incl
 
 ## Consensus approvals
 
-Some secrets need multi-party approval to export. `fill_secret` then returns `status: "pending_approval"` with a `fill_id` and a Turnkey activity id instead of filling. This is normal, not an error:
+Some secrets need multi-party approval to export. `fill_secret` then returns `status: "pending_approval"` with a `fill_id`, a Turnkey `activity_id`, and usually an `approval_url` instead of filling. This is normal, not an error:
 
-1. Tell the user which activity needs approval so an approver can sign it (Turnkey dashboard).
+1. Tell the user approval is needed and give them the `approval_url` exactly as returned, as a full `https://` link on its own line (it opens the activity in the Turnkey dashboard, where it can also be approved from the Turnkey mobile app). Never shorten it, rewrite it, or replace it with the bare activity id. Only if there is no `approval_url` should you fall back to naming the `activity_id` and the Turnkey dashboard.
 2. Leave the page where it is — the fill re-validates the destination before injecting.
 3. Call `await_fill(fill_id)`. If it returns `pending_approval` again, the approval hasn't landed yet; wait and call again. When approved, it completes the fill exactly like `fill_secret` would have.
 

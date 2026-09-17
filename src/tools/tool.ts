@@ -28,6 +28,9 @@ export type ToolContext = {
   registry: RedactionRegistry;
   binding: BindingPolicy;
   pendingFills: Map<string, PendingFill>;
+  /** Dashboard link for an approval-gated activity; undefined when the
+   * backend has no dashboard (mock) or the API host is unknown. */
+  approvalUrl?: (activityId: string) => string | undefined;
 };
 
 /**

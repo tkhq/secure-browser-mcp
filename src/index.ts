@@ -5,7 +5,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { BindingPolicy } from "./broker/binding.js";
 import { MockSecretsClient } from "./broker/mock-secrets.js";
 import type { SecretsClient } from "./broker/secrets-client.js";
-import { turnkeyClientFromEnv } from "./broker/turnkey-env.js";
+import {
+  dashboardActivityUrl,
+  turnkeyClientFromEnv,
+} from "./broker/turnkey-env.js";
 import { TurnkeySecretsClient } from "./broker/turnkey-secrets.js";
 import { BrowserSession } from "./browser/session.js";
 import { RedactionRegistry } from "./redaction/registry.js";
@@ -67,6 +70,7 @@ async function main(): Promise<void> {
     registry: new RedactionRegistry(),
     binding: new BindingPolicy(),
     pendingFills: new Map(),
+    ...(backend === "turnkey" ? { approvalUrl: dashboardActivityUrl } : {}),
   };
 
   const server = createServer(ctx);
