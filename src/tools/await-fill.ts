@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { ConsensusPendingError } from "../broker/secrets-client.js";
 import { injectResolved, validateTargets } from "./fill-common.js";
+import { pendingResult } from "./fill-secret.js";
 import { defineTool } from "./tool.js";
 
 export const awaitFill = defineTool({
@@ -37,12 +38,10 @@ export const awaitFill = defineTool({
     } catch (err) {
       if (err instanceof ConsensusPendingError) {
         return {
-          filled: false,
-          status: "pending_approval",
-          fill_id: fill.fillId,
-          secret_id: ref.secretId,
-          activity_id: fill.pending.activityId,
-          message: "Still awaiting approval. Call await_fill again.",
+          ...pendingResult(ctx, fill),
+          message:
+            "Still awaiting approval. Remind the approver of the link if " +
+            "needed, then call await_fill again.",
         };
       }
       ctx.pendingFills.delete(fill.fillId);

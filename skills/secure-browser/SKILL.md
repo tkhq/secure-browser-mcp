@@ -16,6 +16,18 @@ The secure-browser MCP server is a credential broker that owns a browser. You dr
 - Never ask the user to paste a secret value into the conversation. If a needed secret is missing from `list_secret_refs`, tell the user to import it into their store; pasting it would defeat the point.
 - Everything the server returns is redacted. Fields you filled show `[REDACTED:secret-filled-field]`; password fields show `[MASKED:password-field]`. This is expected, not an error.
 
+## Missing secrets and backend selection
+
+`list_secret_refs` returns `backend: "mock" | "turnkey"` along with `refs`. Check it before advising an import. Mock is the default and contains fixed demo seeds; importing into Turnkey will not change mock results. Turnkey is selected only when all three broker environment variables (`TURNKEY_API_PUBLIC_KEY`, `TURNKEY_API_PRIVATE_KEY`, `TURNKEY_ORGANIZATION_ID`) are nonempty. Ask the user to configure the broker environment and restart it when needed; never request private keys in chat.
+
+For a missing Turnkey reference, direct the user to run `scripts/import-secret.ts --help` from their secure-browser-mcp checkout in their own terminal. It takes name, origin, optional pathname pattern, selector or fields, and `--value-env` naming an environment variable containing the value. It requires confirmation and prints only metadata. Do not read or collect the secret yourself.
+
+Import creates immutable static properties: `sbm:origin` is the exact page origin, `sbm:url-pattern` narrows the pathname, `sbm:selector` restricts a single field, and `sbm:fields` maps JSON payload keys to CSS selectors. Verify the live destination before import. There is no deletion workflow in the current tooling; correcting a binding requires a new import.
+
+## Supported fields
+
+Snapshots and fills target the main frame only. Cross-origin iframe inputs, including embedded Stripe Elements card fields, are unsupported. Expand hidden form controls and snapshot again; if the inputs live in an iframe, explain the limitation and stop that fill. Do not suggest weakening bindings, importing again, or using another browser to extract the value. Hosted Stripe checkout is the documented test surface; it does not imply support for embedded checkout forms.
+
 ## Standard flow
 
 1. `list_secret_refs` — see what secrets exist. Match one to the task by `name` and by `binding.origin` against the site you're targeting.
@@ -28,9 +40,9 @@ The secure-browser MCP server is a credential broker that owns a browser. You dr
 
 ## Consensus approvals
 
-Some secrets need multi-party approval to export. `fill_secret` then returns `status: "pending_approval"` with a `fill_id` and a Turnkey activity id instead of filling. This is normal, not an error:
+Some secrets need multi-party approval to export. `fill_secret` then returns `status: "pending_approval"` with a `fill_id`, a Turnkey `activity_id`, and usually an `approval_url` instead of filling. This is normal, not an error:
 
-1. Tell the user which activity needs approval so an approver can sign it (Turnkey dashboard).
+1. Tell the user approval is needed and give them the `approval_url` exactly as returned, as a full `https://` link on its own line (it opens the activity in the Turnkey dashboard, where it can also be approved from the Turnkey mobile app). Never shorten it, rewrite it, or replace it with the bare activity id. Only if there is no `approval_url` should you fall back to naming the `activity_id` and the Turnkey dashboard.
 2. Leave the page where it is — the fill re-validates the destination before injecting.
 3. Call `await_fill(fill_id)`. If it returns `pending_approval` again, the approval hasn't landed yet; wait and call again. When approved, it completes the fill exactly like `fill_secret` would have.
 

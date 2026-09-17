@@ -30,6 +30,8 @@ There is no `evaluate_script` tool. That is a security decision, not a gap — s
 
 ## Quickstart
 
+**Using Hermes? Start with the [Hermes setup guide](docs/HERMES.md)** for installation, MCP configuration, a first local login and checkout, and the transition to Turnkey Secrets. No Turnkey account is needed for the local demo.
+
 ```sh
 bun install
 bun test          # e2e: fills secrets into a local storefront and asserts
@@ -58,6 +60,8 @@ export TURNKEY_API_PRIVATE_KEY=...
 export TURNKEY_ORGANIZATION_ID=...
 ```
 
+To import your own credential, use `bun run scripts/import-secret.ts --help` and follow the [generic import walkthrough](docs/HERMES.md#import-your-own-secret). `list_secret_refs` reports the active `backend` alongside references. Cross-origin iframe inputs (including embedded Stripe Elements) are currently unsupported; verify the broker can see your target fields before importing.
+
 A secret is fillable when it is imported with binding static properties: `sbm:origin` (required), `sbm:url-pattern`, `sbm:selector`, or `sbm:fields` for JSON payloads — see `src/broker/types.ts`. Bindings are immutable after import.
 
 To require approval for exports, add a Turnkey policy whose consensus names both the broker user (its submission is the first vote) and the approver:
@@ -70,7 +74,7 @@ For a real-world walkthrough — an agent paying a Stripe test checkout with a c
 
 ## Agent Skill and evals
 
-`skills/secure-browser/` is an [Agent Skill](https://agentskills.io) that teaches agents the protocol: secrets are handles, binding rejections are policy, pending approvals are normal. Install with `bun run skill:install -- --claude | --codex` (add `--project` for a repo-local install), or copy the folder anywhere a skills-compatible agent looks.
+`skills/secure-browser/` is an [Agent Skill](https://agentskills.io) that teaches agents the protocol: secrets are handles, binding rejections are policy, pending approvals are normal. Install with `bun run skill:install -- --claude`, `--codex`, or `--hermes`. Claude supports `--project` for a repo-local install; Hermes uses `$HERMES_HOME/skills` when set, otherwise `~/.hermes/skills`. You can also copy the folder anywhere a skills-compatible agent looks.
 
 `evals/` runs a real headless agent against the server and grades the transcript: no leakage (hard fail), `fill_secret` used instead of `type_text`, task completed, plus tool-call metrics for spotting regressions. `bun run eval` — see [evals/README.md](evals/README.md).
 

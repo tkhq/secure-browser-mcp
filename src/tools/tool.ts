@@ -23,10 +23,14 @@ export type PendingFill = {
 /** Shared wiring every tool handler receives. */
 export type ToolContext = {
   secrets: SecretsClient;
+  backend: "mock" | "turnkey";
   session: BrowserSession;
   registry: RedactionRegistry;
   binding: BindingPolicy;
   pendingFills: Map<string, PendingFill>;
+  /** Dashboard link for an approval-gated activity; undefined when the
+   * backend has no dashboard (mock) or the API host is unknown. */
+  approvalUrl?: (activityId: string) => string | undefined;
 };
 
 /**

@@ -1,13 +1,14 @@
 # Tool reference
 
-Eight tools. All results are redacted server-side before you see them.
+Seven working tools and one registered, unavailable stub. All results are redacted server-side before you see them.
 
 ## list_secret_refs
 
-No arguments. Returns `{ refs: SecretRef[] }`:
+No arguments. Returns `{ backend: "mock" | "turnkey", refs: SecretRef[] }`:
 
 ```jsonc
 {
+  "backend": "turnkey", // mock means fixed demo seeds, not your Turnkey store
   "refs": [
     {
       "secretId": "…", // pass this to fill_secret
@@ -52,12 +53,12 @@ Field values are redacted: `[REDACTED:secret-filled-field]` after a fill, `[MASK
 
 Single-value secrets take `element_uid`. A JSON-payload secret — its binding declares `sbm:fields`, a map from payload key to required selector — takes `fields` instead, filling several inputs in ONE call: one export, one approval. Example: a card secret with keys `number`/`expiry`/`cvc` fills all three checkout fields at once.
 
-When the export needs multi-party approval, returns `{ filled: false, status: "pending_approval", fill_id, activity_id }` instead — see `await_fill`. Calling `fill_secret` again for the same secret and element returns the same `fill_id`.
+When the export needs multi-party approval, returns `{ filled: false, status: "pending_approval", fill_id, activity_id, approval_url? }` instead — see `await_fill`. `approval_url` is the fully qualified Turnkey dashboard link for that activity (absent on the mock backend); relay it to the user verbatim. Calling `fill_secret` again for the same secret and element returns the same `fill_id`.
 
 ## await_fill
 
-`{ fill_id: string, timeout_seconds?: number (default 30, max 120) }`. Completes a pending fill once approvers reach quorum: waits up to the timeout, re-validates the destination against the live page, injects. Returns `pending_approval` again if the timeout passes first — the fill stays valid, call again. Fails permanently if the export is rejected, the broker restarted, or the target element left the page.
+`{ fill_id: string, timeout_seconds?: number (default 30, max 120) }`. Completes a pending fill once approvers reach quorum: waits up to the timeout, re-validates the destination against the live page, injects. Returns `pending_approval` again (same fields, including `approval_url`) if the timeout passes first — the fill stays valid, call again. Fails permanently if the export is rejected, the broker restarted, or the target element left the page.
 
-## list_network_requests
+## list_network_requests (unavailable)
 
-No arguments. Metadata only (method, URL, status); request bodies are withheld for origins holding live secrets. Currently not implemented.
+Registered scaffold only: returns `not_implemented`. Do not plan workflows around this tool.
