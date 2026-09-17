@@ -30,7 +30,7 @@ Snapshots and fills target the main frame only. Cross-origin iframe inputs, incl
 
 ## Standard flow
 
-1. `list_secret_refs` — see what secrets exist. Match one to the task by `name` and by `binding.origin` against the site you're targeting.
+1. `list_secret_refs` — see what secrets exist. Pass `origin` (the site you're targeting) to get only the secrets bound there, then match one by `name`. Without `origin` every bound secret is listed; unbound secrets are hidden because they cannot be filled.
 2. `navigate` to the page.
 3. `snapshot` — returns interactive elements with `uid`s. Element uids are invalidated by navigation; re-snapshot after every navigation.
 4. Fill non-secret fields (email, name, ZIP) with `type_text`. These are visible in your transcript, which is fine — they are not secrets.

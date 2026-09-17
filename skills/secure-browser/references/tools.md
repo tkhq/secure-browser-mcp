@@ -4,7 +4,7 @@ Seven working tools and one registered, unavailable stub. All results are redact
 
 ## list_secret_refs
 
-No arguments. Returns `{ backend: "mock" | "turnkey", refs: SecretRef[] }`:
+`{ origin?: string, include_unbound?: boolean }`. Returns `{ backend: "mock" | "turnkey", refs: SecretRef[], hidden?: number }`. With `origin` (the page you are about to fill on, e.g. `https://buy.stripe.com`) only secrets bound to that origin come back. Secrets with no `sbm:origin` cannot be filled and are hidden unless `include_unbound` is true; `hidden` counts what was left out. The broker walks every page of the store, so a large organization is fully listed:
 
 ```jsonc
 {
