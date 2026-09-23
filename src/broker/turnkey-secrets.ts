@@ -29,7 +29,7 @@ const TERMINAL_FAILURE = new Set([
 type HeldExport = { proposal: Proposal; privateKey: string };
 
 /**
- * Thin adapter over @turnkey/sdk-server's Secrets API (tkhq/sdk#1479).
+ * Thin adapter over @turnkey/sdk-server's Secrets API.
  *
  * The export runs the proposal flow manually rather than via the SDK's
  * one-shot `exportSecret`: that helper discards its ephemeral decryption key

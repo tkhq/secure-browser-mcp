@@ -7,7 +7,6 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY package.json bun.lock ./
-COPY vendor ./vendor
 RUN bun install --frozen-lockfile --production
 COPY src ./src
 COPY tsconfig.json ./
