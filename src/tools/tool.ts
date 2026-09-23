@@ -1,33 +1,26 @@
 import type { ZodRawShape, objectOutputType, ZodTypeAny } from "zod";
 
 import type { BindingPolicy } from "../broker/binding.js";
-import type { PendingExport, SecretsClient } from "../broker/secrets-client.js";
+import type { PendingFills } from "../broker/pending-store.js";
+import type { SecretsClient } from "../broker/secrets-client.js";
 import type { BrowserSession } from "../browser/session.js";
 import type { RedactionRegistry } from "../redaction/registry.js";
 
-/**
- * A fill_secret call parked on consensus approval. Broker memory only — the
- * agent holds just the fillId. The original targets are retained so the fill
- * can be re-validated against the live page once approvals land.
- */
-export type PendingFill = {
-  fillId: string;
-  pending: PendingExport;
-  /** Requested destinations: element uids, with payload keys for JSON
-   * multi-field secrets. */
-  targets: { key?: string; elementUid: string }[];
-  pageUrl: string;
-  createdAt: number;
-};
+export type { PendingFill } from "../broker/pending-store.js";
 
-/** Shared wiring every tool handler receives. */
+/**
+ * Shared wiring every tool handler receives. One context per agent session:
+ * `session`, `registry`, and `pendingFills` belong to that session alone;
+ * `secrets` and `binding` are shared by every session of the broker.
+ */
 export type ToolContext = {
   secrets: SecretsClient;
   backend: "mock" | "turnkey";
   session: BrowserSession;
   registry: RedactionRegistry;
   binding: BindingPolicy;
-  pendingFills: Map<string, PendingFill>;
+  /** This session's parked fills (see src/broker/pending-store.ts). */
+  pendingFills: PendingFills;
   /** Dashboard link for an approval-gated activity; undefined when the
    * backend has no dashboard (mock) or the API host is unknown. */
   approvalUrl?: (activityId: string) => string | undefined;

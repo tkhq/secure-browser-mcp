@@ -13,6 +13,9 @@ export type BrowserSessionConfig = {
   /** Path to a Chrome/Chromium executable. */
   executablePath: string;
   headless?: boolean;
+  /** Extra Chrome flags from the deployment (SBM_CHROME_ARGS), e.g.
+   * --disable-dev-shm-usage in a container. */
+  extraArgs?: string[];
 };
 
 /** A snapshot-resolved element the broker can act on. */
@@ -56,6 +59,7 @@ export class BrowserSession {
         "--no-default-browser-check",
         "--disable-background-networking",
         "--disable-sync",
+        ...(this.config.extraArgs ?? []),
       ],
     });
 

@@ -46,7 +46,7 @@ Some secrets need multi-party approval to export. `fill_secret` then returns `st
 2. Leave the page where it is — the fill re-validates the destination before injecting.
 3. Call `await_fill(fill_id)`. If it returns `pending_approval` again, the approval hasn't landed yet; wait and call again. When approved, it completes the fill exactly like `fill_secret` would have.
 
-If `await_fill` reports the target element is gone (the page changed while waiting), snapshot again and start a new `fill_secret`.
+If `await_fill` reports the target element is gone (the page changed while waiting, or a hosted broker restarted), navigate back to the page if needed, snapshot again, and call `await_fill` with the same `fill_id` plus the new `element_uid` or `fields`. The approval is not lost.
 
 ## Binding rejections are policy, not bugs
 

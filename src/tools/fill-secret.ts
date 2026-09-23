@@ -5,6 +5,8 @@ import { z } from "zod";
 import { ConsensusNeededError } from "../broker/secrets-client.js";
 import {
   injectResolved,
+  specsFromArgs,
+  targetArgs,
   validateTargets,
   type FillFieldSpec,
 } from "./fill-common.js";
@@ -46,25 +48,7 @@ export const fillSecret = defineTool({
     "in one call — one export, one approval.",
   inputSchema: {
     secret_id: z.string().describe("secretId from list_secret_refs"),
-    element_uid: z
-      .string()
-      .optional()
-      .describe(
-        "Element uid of the target field (single-value secrets), from the " +
-          "latest snapshot",
-      ),
-    fields: z
-      .array(
-        z.object({
-          key: z.string().describe("Payload key from the binding's sbm:fields"),
-          element_uid: z.string().describe("Target element uid"),
-        }),
-      )
-      .optional()
-      .describe(
-        "For JSON-payload secrets: which payload key goes into which " +
-          "element. Provide instead of element_uid.",
-      ),
+    ...targetArgs,
   },
   handler: async (ctx, args) => {
     // 1. Resolve the ref.
@@ -73,12 +57,8 @@ export const fillSecret = defineTool({
     if (!ref) throw new Error(`Unknown secret: ${args.secret_id}`);
 
     // 2. Normalize the requested destinations.
-    if (!args.element_uid === !args.fields) {
-      throw new Error("Provide exactly one of element_uid or fields");
-    }
-    const specs: FillFieldSpec[] = args.fields
-      ? args.fields.map((f) => ({ key: f.key, elementUid: f.element_uid }))
-      : [{ elementUid: args.element_uid! }];
+    const specs = specsFromArgs(args);
+    if (!specs) throw new Error("Provide exactly one of element_uid or fields");
 
     // 3. Prompt-injection gate: the live page and every element must match
     //    the binding baked into the secret's static properties at import.
@@ -92,9 +72,9 @@ export const fillSecret = defineTool({
     //    (If the parked activity was meanwhile rejected, await_fill reports
     //    that and clears the entry, and the next fill_secret starts fresh.)
     const requestKey = specsKey(ref.secretId, specs);
-    const existing = [...ctx.pendingFills.values()].find(
-      (f) => specsKey(f.pending.ref.secretId, f.targets) === requestKey,
-    );
+    const existing = ctx.pendingFills
+      .list()
+      .find((f) => specsKey(f.pending.ref.secretId, f.targets) === requestKey);
     if (existing) return pendingResult(ctx, existing);
 
     // 6. Export: plaintext lands in broker memory only. A consensus-gated
@@ -113,7 +93,7 @@ export const fillSecret = defineTool({
           pageUrl: resolved[0]!.target.pageUrl,
           createdAt: Date.now(),
         };
-        ctx.pendingFills.set(fill.fillId, fill);
+        await ctx.pendingFills.put(fill);
         return pendingResult(ctx, fill);
       }
       throw err;

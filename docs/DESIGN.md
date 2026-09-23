@@ -53,14 +53,14 @@ No `evaluate_script`. Agent-authored JS can hook `input` events and exfiltrate a
 
 ## Consensus exports
 
-When policy requires more approvers, the broker runs the proposal flow itself rather than the SDK's one-shot `exportSecret` — the one-shot helper discards its ephemeral decryption key on the consensus path, which would leave the pending activity unredeemable. The broker submits the proposal, retains the key in memory keyed by activity id, and parks the fill:
+When policy requires more approvers, the broker runs the proposal flow itself rather than the SDK's one-shot `exportSecret` — the one-shot helper discards its ephemeral decryption key on the consensus path, which would leave the pending activity unredeemable. The broker submits the proposal, keeps the key with the parked fill (`PendingExport.material`), and parks the fill:
 
 - `fill_secret` returns `{status: "pending_approval", fill_id, activity_id}` instead of filling. Idempotent: re-requesting the same secret+element returns the same handle rather than proposing a duplicate.
 - Approvers sign the export activity out-of-band (Turnkey dashboard). Co-signers are order-independent; the SDK serializes the proposal body once and every signer stamps the same bytes.
-- `await_fill(fill_id)` waits for quorum, then **re-validates before injecting**: approval takes wall-clock time, so the binding is re-checked against the live page and the element is re-resolved. If the page moved on, the plaintext is dropped, never redirected.
-- A broker restart discards the held decryption keys, making pending exports unredeemable by design. Timeouts return `pending_approval` again; rejection kills the fill.
+- `await_fill(fill_id)` waits for quorum, then **re-validates before injecting**: approval takes wall-clock time, so the binding is re-checked against the live page and the element is re-resolved. If the page moved on, the plaintext is dropped, never redirected, and the fill stays parked. `await_fill` accepts a new `element_uid` or `fields` from a fresh snapshot; the new targets pass the same binding checks.
+- The stdio broker keeps parked fills in memory, so a restart makes them unredeemable. The hosted broker persists them encrypted, so a pending fill survives a restart (see [HOSTED.md](HOSTED.md#restarts-and-pending-fills)). Timeouts return `pending_approval` again; rejection kills the fill.
 
-Two honest gaps: the approver sees "release secret X to target key Y", not the destination page (closing that is the TVC attestation story plus a proposal-metadata feature request), and there is no proposal cancel — an abandoned fill leaves a pending activity whose key the broker has already dropped.
+Two honest gaps: the approver sees "release secret X to target key Y", not the destination page (closing that is the TVC attestation story plus a proposal-metadata feature request), and there is no proposal cancel — an abandoned fill leaves a pending activity in Turnkey. The broker drops the parked fill, and its key, after 24 hours.
 
 The `await_fill` tool is the transport-agnostic fallback; when MCP Tasks (2026-07-28 RC) client support lands, the same pending-fill state machine surfaces as a task handle instead.
 

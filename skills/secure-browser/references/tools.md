@@ -57,7 +57,7 @@ When the export needs multi-party approval, returns `{ filled: false, status: "p
 
 ## await_fill
 
-`{ fill_id: string, timeout_seconds?: number (default 30, max 120) }`. Completes a pending fill once approvers reach quorum: waits up to the timeout, re-validates the destination against the live page, injects. Returns `pending_approval` again (same fields, including `approval_url`) if the timeout passes first — the fill stays valid, call again. Fails permanently if the export is rejected, the broker restarted, or the target element left the page.
+`{ fill_id: string, timeout_seconds?: number (default 30, max 120), element_uid?: string, fields?: { key, element_uid }[] }`. Completes a pending fill once approvers reach quorum: waits up to the timeout, re-validates the destination against the live page, injects. Returns `pending_approval` again (same fields, including `approval_url`) if the timeout passes first — the fill stays valid, call again. Fails permanently if the export is rejected. If the target element left the page (or a hosted broker restarted), the fill stays valid: navigate back, snapshot, and call `await_fill` again with the same `fill_id` and the new `element_uid` or `fields`.
 
 ## list_network_requests (unavailable)
 

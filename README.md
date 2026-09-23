@@ -17,7 +17,7 @@
 - **One approval per form**: A JSON-payload secret (card number, expiry, CVC) fills several fields in one call, under one export and one approval
 - **Secure enclave storage**: Credentials live in [Turnkey Secrets](https://docs.turnkey.com/features/secrets), so no single party can access them alone. That includes Turnkey, and it includes the agent
 - **Cryptographic audit trail**: Every export request, approver, and destination lands as a signed Turnkey activity you can query
-- **Any MCP client**: Point Claude Code, Codex, or any agent framework at the server over stdio
+- **Any MCP client**: Point Claude Code, Codex, or any agent framework at the server over stdio, or at a hosted broker by URL ([docs/HOSTED.md](docs/HOSTED.md))
 - **Skill and evals included**: Ships with an Agent Skill that teaches agents the workflow and an eval harness that runs real headless agent sessions and hard-fails any leak
 
 ## Overview
@@ -37,6 +37,7 @@ bun install
 bun test          # e2e: fills secrets into a local storefront and asserts
                   # the plaintext never appears in server output
 bun run dev       # starts the MCP server on stdio
+bun run serve     # or over Streamable HTTP; see docs/HOSTED.md
 ```
 
 The server needs a Chromium-based browser. It checks `SBM_CHROME_PATH` first, then common install locations (Chrome, Chromium, Brave, Edge). Set `SBM_HEADLESS=false` to watch it work.
@@ -87,7 +88,7 @@ For a real-world walkthrough — an agent paying a Stripe test checkout with a c
 | `src/redaction/` | The scrub layer every tool result passes through                                                  |
 | `src/tools/`     | One file per MCP tool                                                                             |
 | `test/fixtures/` | The demo storefront (login, checkout, receipt)                                                    |
-| `docs/`          | Design, threat model, Stripe demo walkthrough                                                     |
+| `docs/`          | Design, threat model, hosted broker, Stripe demo walkthrough                                      |
 
 The Secrets API methods are on `tkhq/sdk` main but not on npm yet, so `vendor/` holds tarballs packed from a local `../sdk` checkout, pinned through `overrides` in `package.json`. Drop them once `@turnkey/sdk-server@8.3.0` ships. To regenerate:
 
