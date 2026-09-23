@@ -20,3 +20,32 @@ export function turnkeyClientFromEnv(): TurnkeyApiClient | undefined {
     defaultOrganizationId,
   }).apiClient();
 }
+
+/**
+ * Dashboard page for a Turnkey activity, so approvers can be sent a link
+ * instead of a bare id. Derived from TURNKEY_API_BASE_URL (api.turnkey.com →
+ * app.turnkey.com, api.<env>.turnkey.engineering → app.<env>.turnkey.engineering);
+ * SBM_DASHBOARD_URL overrides the base. Undefined when the host is unknown —
+ * callers then fall back to the activity id alone.
+ */
+export function dashboardActivityUrl(activityId: string): string | undefined {
+  const base = dashboardBaseFromEnv();
+  if (!base) return undefined;
+  return `${base}/activities/${encodeURIComponent(activityId)}`;
+}
+
+export function dashboardBaseFromEnv(): string | undefined {
+  const override = process.env["SBM_DASHBOARD_URL"];
+  if (override) return override.replace(/\/+$/, "");
+  const api = process.env["TURNKEY_API_BASE_URL"] ?? "https://api.turnkey.com";
+  let host: string;
+  try {
+    host = new URL(api).host;
+  } catch {
+    return undefined;
+  }
+  if (host === "api.turnkey.com") return "https://app.turnkey.com/dashboard/v2";
+  const m = /^api\.([a-z0-9-]+)\.turnkey\.engineering$/.exec(host);
+  if (m) return `https://app.${m[1]}.turnkey.engineering/dashboard/v2`;
+  return undefined;
+}

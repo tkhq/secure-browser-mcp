@@ -5,7 +5,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { BindingPolicy } from "./broker/binding.js";
 import { MockSecretsClient } from "./broker/mock-secrets.js";
 import type { SecretsClient } from "./broker/secrets-client.js";
-import { turnkeyClientFromEnv } from "./broker/turnkey-env.js";
+import {
+  dashboardActivityUrl,
+  turnkeyClientFromEnv,
+} from "./broker/turnkey-env.js";
 import { TurnkeySecretsClient } from "./broker/turnkey-secrets.js";
 import { BrowserSession } from "./browser/session.js";
 import { RedactionRegistry } from "./redaction/registry.js";
@@ -15,7 +18,10 @@ import { createServer } from "./server.js";
 // SBM_MOCK_CONSENSUS (comma-separated secret names) makes those mock secrets
 // consensus-gated, with approval arriving SBM_MOCK_CONSENSUS_DELAY_MS after
 // the first export attempt — enough to exercise the pending → await flow.
-function makeSecretsClient(): { client: SecretsClient; backend: string } {
+function makeSecretsClient(): {
+  client: SecretsClient;
+  backend: "mock" | "turnkey";
+} {
   const apiClient = turnkeyClientFromEnv();
   if (apiClient) {
     return { client: new TurnkeySecretsClient(apiClient), backend: "turnkey" };
@@ -56,6 +62,7 @@ async function main(): Promise<void> {
   const { client: secrets, backend } = makeSecretsClient();
   const ctx = {
     secrets,
+    backend,
     session: new BrowserSession({
       executablePath: findChrome(),
       headless: process.env["SBM_HEADLESS"] !== "false",
@@ -63,6 +70,7 @@ async function main(): Promise<void> {
     registry: new RedactionRegistry(),
     binding: new BindingPolicy(),
     pendingFills: new Map(),
+    ...(backend === "turnkey" ? { approvalUrl: dashboardActivityUrl } : {}),
   };
 
   const server = createServer(ctx);

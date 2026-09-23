@@ -8,20 +8,25 @@ import {
   validateTargets,
   type FillFieldSpec,
 } from "./fill-common.js";
-import { defineTool, type PendingFill } from "./tool.js";
+import { defineTool, type PendingFill, type ToolContext } from "./tool.js";
 
-function pendingResult(fill: PendingFill) {
+export function pendingResult(ctx: ToolContext, fill: PendingFill) {
+  const activityId = fill.pending.activityId;
+  const approvalUrl = ctx.approvalUrl?.(activityId);
+  const where =
+    approvalUrl ?? `activity ${activityId} in the Turnkey dashboard`;
   return {
     filled: false,
     status: "pending_approval",
     fill_id: fill.fillId,
     secret_id: fill.pending.ref.secretId,
-    activity_id: fill.pending.activityId,
+    activity_id: activityId,
+    ...(approvalUrl ? { approval_url: approvalUrl } : {}),
     message:
-      "Export requires consensus approval. Ask an approver to approve " +
-      `activity ${fill.pending.activityId} (Turnkey dashboard), then ` +
-      "call await_fill with this fill_id. Keep the page where it is: " +
-      "the fill re-validates the destination before injecting.",
+      "Export requires consensus approval. Send the approver this exact " +
+      `link to approve: ${where}. Then call await_fill with this fill_id. ` +
+      "Keep the page where it is: the fill re-validates the destination " +
+      "before injecting.",
   };
 }
 
@@ -90,7 +95,7 @@ export const fillSecret = defineTool({
     const existing = [...ctx.pendingFills.values()].find(
       (f) => specsKey(f.pending.ref.secretId, f.targets) === requestKey,
     );
-    if (existing) return pendingResult(existing);
+    if (existing) return pendingResult(ctx, existing);
 
     // 6. Export: plaintext lands in broker memory only. A consensus-gated
     //    export parks the fill instead of failing it: the broker keeps the
@@ -109,7 +114,7 @@ export const fillSecret = defineTool({
           createdAt: Date.now(),
         };
         ctx.pendingFills.set(fill.fillId, fill);
-        return pendingResult(fill);
+        return pendingResult(ctx, fill);
       }
       throw err;
     }

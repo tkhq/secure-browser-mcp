@@ -13,7 +13,8 @@
     "test": "bun test",
     "demo:fixture": "bun run test/fixtures/serve.ts",
     "eval": "bun run evals/run.ts",
-    "skill:install": "bun run scripts/install-skill.ts"
+    "skill:install": "bun run scripts/install-skill.ts",
+    "hermes:config": "bun run scripts/hermes-config.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
