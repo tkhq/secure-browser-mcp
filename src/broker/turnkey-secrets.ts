@@ -14,6 +14,11 @@ import { parseBinding } from "./mock-secrets.js";
  * needs to carry it opaquely between submit and await. */
 type Proposal = ReturnType<TurnkeyApiClient["createExportSecretsProposal"]>;
 
+/** ListSecrets accepts 1..100 per page. */
+const PAGE_SIZE = 100;
+/** Upper bound on pages walked per listRefs call (10,000 secrets). */
+const MAX_PAGES = 100;
+
 const TERMINAL_FAILURE = new Set([
   "ACTIVITY_STATUS_REJECTED",
   "ACTIVITY_STATUS_FAILED",
@@ -38,18 +43,37 @@ export class TurnkeySecretsClient implements SecretsClient {
 
   constructor(private readonly client: TurnkeyApiClient) {}
 
+  /**
+   * Every secret in the organization. The public ListSecrets API has no
+   * filters and returns at most 100 secrets per call (default 10), newest
+   * first, with the last secret id as the cursor for the next page, so this
+   * walks the pages until one comes back short. `MAX_PAGES` bounds the walk;
+   * an organization past that size needs a narrower store for the broker.
+   */
   async listRefs(): Promise<SecretRef[]> {
-    const secrets = await this.client.getSecrets({});
-    return secrets.map((s) => {
-      const ref: SecretRef = {
-        secretId: s.secretId,
-        staticProperties: s.staticProperties,
-      };
-      if (s.name !== undefined) ref.name = s.name;
-      const binding = parseBinding(s.staticProperties);
-      if (binding) ref.binding = binding;
-      return ref;
-    });
+    const refs: SecretRef[] = [];
+    let after: string | undefined;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const secrets = await this.client.getSecrets({
+        paginationOptions: {
+          limit: String(PAGE_SIZE),
+          ...(after ? { after } : {}),
+        },
+      });
+      for (const s of secrets) {
+        const ref: SecretRef = {
+          secretId: s.secretId,
+          staticProperties: s.staticProperties,
+        };
+        if (s.name !== undefined) ref.name = s.name;
+        const binding = parseBinding(s.staticProperties);
+        if (binding) ref.binding = binding;
+        refs.push(ref);
+      }
+      if (secrets.length < PAGE_SIZE) break;
+      after = secrets[secrets.length - 1]!.secretId;
+    }
+    return refs;
   }
 
   async exportSecret(ref: SecretRef): Promise<ExportedSecret> {
