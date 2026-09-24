@@ -24,23 +24,21 @@ const TERMINAL_FAILURE = new Set([
   "ACTIVITY_STATUS_FAILED",
 ]);
 
+/** What a pending export needs for redemption, carried as
+ * `PendingExport.material`. */
+type HeldExport = { proposal: Proposal; privateKey: string };
+
 /**
  * Thin adapter over @turnkey/sdk-server's Secrets API.
  *
  * The export runs the proposal flow manually rather than via the SDK's
  * one-shot `exportSecret`: that helper discards its ephemeral decryption key
  * when consensus is needed, leaving the pending activity unredeemable. Here
- * the key is retained in broker memory, keyed by activity id, so the fill
- * can complete once approvers reach quorum. Keys never leave this class and
- * die with the process.
+ * the key goes into the pending export's `material`, so the fill can
+ * complete once approvers reach quorum, including after a broker restart
+ * when the pending-fill store is persistent.
  */
 export class TurnkeySecretsClient implements SecretsClient {
-  /** activityId → the material needed to redeem the export after approval. */
-  private readonly held = new Map<
-    string,
-    { proposal: Proposal; privateKey: string }
-  >();
-
   constructor(private readonly client: TurnkeyApiClient) {}
 
   /**
@@ -86,11 +84,12 @@ export class TurnkeySecretsClient implements SecretsClient {
     const submitted = await this.client.submitExportSecrets(proposal);
 
     if (submitted.status === "ACTIVITY_STATUS_CONSENSUS_NEEDED") {
-      this.held.set(submitted.activityId, { proposal, privateKey });
+      const held: HeldExport = { proposal, privateKey };
       throw new ConsensusNeededError(ref.secretId, {
         ref,
         activityId: submitted.activityId,
         fingerprint: submitted.fingerprint,
+        material: JSON.stringify(held),
       });
     }
 
@@ -101,11 +100,13 @@ export class TurnkeySecretsClient implements SecretsClient {
     pending: PendingExport,
     timeoutMs: number,
   ): Promise<ExportedSecret> {
-    const held = this.held.get(pending.activityId);
-    if (!held) {
+    let held: HeldExport;
+    try {
+      held = JSON.parse(pending.material) as HeldExport;
+    } catch {
       throw new Error(
-        `No decryption key held for activity ${pending.activityId} — the ` +
-          `broker restarted since the export was proposed. Start a new fill.`,
+        `No decryption key held for activity ${pending.activityId}. ` +
+          `Start a new fill.`,
       );
     }
 
@@ -116,7 +117,6 @@ export class TurnkeySecretsClient implements SecretsClient {
         activityId: pending.activityId,
       });
       if (activity.status === "ACTIVITY_STATUS_COMPLETED") {
-        this.held.delete(pending.activityId);
         return this.redeem(
           pending.ref,
           held.proposal,
@@ -125,7 +125,6 @@ export class TurnkeySecretsClient implements SecretsClient {
         );
       }
       if (TERMINAL_FAILURE.has(activity.status)) {
-        this.held.delete(pending.activityId);
         throw new Error(
           `Export of ${pending.ref.secretId} ended ${activity.status} ` +
             `(activity ${pending.activityId})`,

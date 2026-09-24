@@ -92,18 +92,28 @@ export class MockSecretsClient implements SecretsClient {
     pending: PendingExport,
     timeoutMs: number,
   ): Promise<ExportedSecret> {
+    // Approval time travels in the pending export, like Turnkey's key
+    // material, so a persisted pending fill survives a broker restart.
     const secret = this.secrets.get(pending.ref.secretId);
-    const since = this.pendingSince.get(pending.ref.secretId);
-    if (!secret || since === undefined) {
+    let approvedAt: number | undefined;
+    try {
+      approvedAt = (JSON.parse(pending.material) as { approvedAt?: number })
+        .approvedAt;
+    } catch {
+      approvedAt = undefined;
+    }
+    if (!secret || typeof approvedAt !== "number") {
       throw new Error(`No pending export for ${pending.ref.secretId}`);
     }
-    const approvedAt = since + this.approvalDelayMs;
     const wait = approvedAt - Date.now();
     if (wait > timeoutMs) {
       await new Promise((r) => setTimeout(r, timeoutMs));
       throw new ConsensusPendingError(pending);
     }
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    // One approval, one export, as with Turnkey activities: the next
+    // fill_secret for this secret needs approval again.
+    this.pendingSince.delete(pending.ref.secretId);
     return { ref: pending.ref, value: secret.value, release: () => {} };
   }
 
@@ -113,22 +123,30 @@ export class MockSecretsClient implements SecretsClient {
   }
 
   private pendingHandle(ref: SecretRef): PendingExport {
+    const since = this.pendingSince.get(ref.secretId)!;
     return {
       ref,
       activityId: `mock-activity-${ref.secretId}`,
       fingerprint: `mock-fingerprint-${ref.secretId}`,
+      material: JSON.stringify({ approvedAt: since + this.approvalDelayMs }),
     };
   }
 }
 
+/** Where the demo fixture is served. A hosted broker's browser cannot reach
+ * the agent's localhost, so a hosted demo serves the fixture publicly and
+ * sets SBM_MOCK_ORIGIN to that origin. */
+const FIXTURE_ORIGIN =
+  process.env["SBM_MOCK_ORIGIN"] ?? "http://localhost:4173";
+
 const DEFAULT_SEED: MockSecret[] = [
   {
-    // Bound to the local demo fixture (test/fixtures/login.html served on
-    // port 4173) so the end-to-end demo works out of the box.
+    // Bound to the demo fixture (test/fixtures/login.html, served on port
+    // 4173 by default) so the end-to-end demo works out of the box.
     name: "demo-login-password",
     value: "mock-demo-p@ssw0rd-1234",
     staticProperties: {
-      [BINDING_KEYS.origin]: "http://localhost:4173",
+      [BINDING_KEYS.origin]: FIXTURE_ORIGIN,
       [BINDING_KEYS.urlPattern]: "/login*",
       [BINDING_KEYS.selector]: "input[type=password]",
     },
@@ -145,7 +163,7 @@ const DEFAULT_SEED: MockSecret[] = [
       cvc: "123",
     }),
     staticProperties: {
-      [BINDING_KEYS.origin]: "http://localhost:4173",
+      [BINDING_KEYS.origin]: FIXTURE_ORIGIN,
       [BINDING_KEYS.urlPattern]: "/checkout*",
       [BINDING_KEYS.fields]: JSON.stringify({
         number: "input[name=cardNumber]",
