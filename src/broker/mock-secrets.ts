@@ -133,14 +133,20 @@ export class MockSecretsClient implements SecretsClient {
   }
 }
 
+/** Where the demo fixture is served. A hosted broker's browser cannot reach
+ * the agent's localhost, so a hosted demo serves the fixture publicly and
+ * sets SBM_MOCK_ORIGIN to that origin. */
+const FIXTURE_ORIGIN =
+  process.env["SBM_MOCK_ORIGIN"] ?? "http://localhost:4173";
+
 const DEFAULT_SEED: MockSecret[] = [
   {
-    // Bound to the local demo fixture (test/fixtures/login.html served on
-    // port 4173) so the end-to-end demo works out of the box.
+    // Bound to the demo fixture (test/fixtures/login.html, served on port
+    // 4173 by default) so the end-to-end demo works out of the box.
     name: "demo-login-password",
     value: "mock-demo-p@ssw0rd-1234",
     staticProperties: {
-      [BINDING_KEYS.origin]: "http://localhost:4173",
+      [BINDING_KEYS.origin]: FIXTURE_ORIGIN,
       [BINDING_KEYS.urlPattern]: "/login*",
       [BINDING_KEYS.selector]: "input[type=password]",
     },
@@ -157,7 +163,7 @@ const DEFAULT_SEED: MockSecret[] = [
       cvc: "123",
     }),
     staticProperties: {
-      [BINDING_KEYS.origin]: "http://localhost:4173",
+      [BINDING_KEYS.origin]: FIXTURE_ORIGIN,
       [BINDING_KEYS.urlPattern]: "/checkout*",
       [BINDING_KEYS.fields]: JSON.stringify({
         number: "input[name=cardNumber]",

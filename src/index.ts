@@ -17,7 +17,8 @@ async function main(): Promise<void> {
   await server.connect(new StdioServerTransport());
   // stdout carries the MCP transport; diagnostics go to stderr only.
   console.error(
-    `secure-browser-mcp: listening on stdio (backend: ${broker.backend})`,
+    `secure-browser-mcp: listening on stdio (backend: ${broker.backend}, ` +
+      `browser: ${broker.browser})`,
   );
 
   // When the client disconnects, take the browser down with us — an orphaned

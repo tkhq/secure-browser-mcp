@@ -7,6 +7,7 @@ import {
   MemoryPendingFillStore,
   scopedFills,
 } from "../src/broker/pending-store.js";
+import { LocalChromeHost } from "../src/browser/hosts.js";
 import { BrowserSession } from "../src/browser/session.js";
 import { RedactionRegistry } from "../src/redaction/registry.js";
 
@@ -139,10 +140,9 @@ for (const backend of ["mock", "turnkey"] as const) {
       {
         backend,
         secrets,
-        session: new BrowserSession({
-          executablePath: "/unused",
-          headless: true,
-        }),
+        session: new BrowserSession(
+          new LocalChromeHost({ executablePath: "/unused" }),
+        ),
         registry: new RedactionRegistry(),
         binding: new BindingPolicy(),
         pendingFills: scopedFills(new MemoryPendingFillStore(), "test"),

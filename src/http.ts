@@ -178,7 +178,11 @@ async function main(): Promise<void> {
   const http = createHttpServer((req, res) => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
     if (path === "/healthz") {
-      return send(res, 200, { ok: true, backend: broker.backend });
+      return send(res, 200, {
+        ok: true,
+        backend: broker.backend,
+        browser: broker.browser,
+      });
     }
     if (path !== "/mcp") return send(res, 404, { error: "not found" });
     if (!authorized(req, token)) {
@@ -209,7 +213,7 @@ async function main(): Promise<void> {
   await new Promise<void>((resolve) => http.listen(port, host, resolve));
   console.error(
     `secure-browser-mcp: listening on http://${host}:${port}/mcp ` +
-      `(backend: ${broker.backend})`,
+      `(backend: ${broker.backend}, browser: ${broker.browser})`,
   );
 
   // Pending fills stay in the store; browsers do not outlive the process.

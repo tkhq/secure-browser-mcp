@@ -13,6 +13,11 @@ import {
   turnkeyClientFromEnv,
 } from "./broker/turnkey-env.js";
 import { TurnkeySecretsClient } from "./broker/turnkey-secrets.js";
+import {
+  BrowserbaseHost,
+  LocalChromeHost,
+  type BrowserHost,
+} from "./browser/hosts.js";
 import { BrowserSession } from "./browser/session.js";
 import { RedactionRegistry } from "./redaction/registry.js";
 import type { ToolContext } from "./tools/tool.js";
@@ -66,8 +71,50 @@ export type Broker = {
   secrets: SecretsClient;
   backend: "mock" | "turnkey";
   binding: BindingPolicy;
-  chromePath: string;
+  /** Builds one browser host per agent session. */
+  browserHost: () => BrowserHost;
+  browser: "local" | "browserbase";
 };
+
+/**
+ * SBM_BROWSER picks where session browsers run: "local" (default; Chrome on
+ * this machine) or "browserbase" (BROWSERBASE_API_KEY, optional
+ * BROWSERBASE_PROJECT_ID and SBM_BROWSERBASE_TIMEOUT_S).
+ */
+function browserHostFromEnv(): Pick<Broker, "browserHost" | "browser"> {
+  const kind = process.env["SBM_BROWSER"] ?? "local";
+  if (kind === "browserbase") {
+    const apiKey = process.env["BROWSERBASE_API_KEY"];
+    if (!apiKey)
+      throw new Error("SBM_BROWSER=browserbase needs BROWSERBASE_API_KEY");
+    const projectId = process.env["BROWSERBASE_PROJECT_ID"];
+    const timeout = Number(process.env["SBM_BROWSERBASE_TIMEOUT_S"] ?? "");
+    return {
+      browser: "browserbase",
+      browserHost: () =>
+        new BrowserbaseHost({
+          apiKey,
+          ...(projectId ? { projectId } : {}),
+          ...(timeout > 0 ? { timeoutSeconds: timeout } : {}),
+        }),
+    };
+  }
+  if (kind !== "local") {
+    throw new Error(
+      `SBM_BROWSER must be "local" or "browserbase", not "${kind}"`,
+    );
+  }
+  const executablePath = findChrome();
+  const headless = process.env["SBM_HEADLESS"] !== "false";
+  const extraArgs = (process.env["SBM_CHROME_ARGS"] ?? "")
+    .split(/\s+/)
+    .filter(Boolean);
+  return {
+    browser: "local",
+    browserHost: () =>
+      new LocalChromeHost({ executablePath, headless, extraArgs }),
+  };
+}
 
 export function makeBroker(): Broker {
   const { client, backend } = makeSecretsClient();
@@ -75,7 +122,7 @@ export function makeBroker(): Broker {
     secrets: client,
     backend,
     binding: new BindingPolicy(),
-    chromePath: findChrome(),
+    ...browserHostFromEnv(),
   };
 }
 
@@ -85,18 +132,11 @@ export function sessionContext(
   broker: Broker,
   pendingFills: PendingFills,
 ): ToolContext {
-  const extraArgs = (process.env["SBM_CHROME_ARGS"] ?? "")
-    .split(/\s+/)
-    .filter(Boolean);
   return {
     secrets: broker.secrets,
     backend: broker.backend,
     binding: broker.binding,
-    session: new BrowserSession({
-      executablePath: broker.chromePath,
-      headless: process.env["SBM_HEADLESS"] !== "false",
-      extraArgs,
-    }),
+    session: new BrowserSession(broker.browserHost()),
     registry: new RedactionRegistry(),
     pendingFills,
     ...(broker.backend === "turnkey"
