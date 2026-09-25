@@ -116,6 +116,15 @@ test("fills a JSON card secret into several fields with one call", async () => {
   const byName = (name: string) =>
     snap.elements.find((e) => e.name === name)!.uid;
 
+  // An unkeyed fill would write the whole JSON payload into one field; the
+  // binding declares per-key selectors, so it is refused before any export.
+  const unkeyed = await client.callTool("fill_secret", {
+    secret_id: card!.secretId,
+    element_uid: byName("cardName"),
+  });
+  expect(unkeyed.isError).toBe(true);
+  expect(unkeyed.text).toContain("fill each part by key");
+
   // A payload key the binding doesn't declare is refused before any export,
   // and a declared key aimed at the wrong element fails its selector check.
   const badKey = await client.callTool("fill_secret", {

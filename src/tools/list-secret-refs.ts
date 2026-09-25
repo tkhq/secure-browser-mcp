@@ -29,7 +29,8 @@ export const listSecretRefs = defineTool({
     "Report the active backend (mock or turnkey) and list the secrets available to fill, as opaque references: id, name, and " +
     "destination binding (origin/url pattern/selector). Pass origin to see only " +
     "the secrets bound to the site you are on. Secrets without a destination " +
-    "binding cannot be filled and are hidden unless include_unbound is set. " +
+    "binding, or with a malformed one (reported as bindingError), cannot be " +
+    "filled and are hidden unless include_unbound is set. " +
     "Secret values are never returned by any tool.",
   inputSchema: {
     origin: z

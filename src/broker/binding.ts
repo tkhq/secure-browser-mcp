@@ -33,6 +33,13 @@ export class BindingPolicy {
     target: FillTarget,
     probe: BindingProbe,
   ): Promise<void> {
+    if (ref.bindingError) {
+      throw new BindingViolationError(
+        ref,
+        target,
+        `secret's destination binding is invalid (${ref.bindingError})`,
+      );
+    }
     const binding = ref.binding;
     if (!binding) {
       throw new BindingViolationError(
