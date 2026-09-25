@@ -66,8 +66,7 @@ export class TurnkeySecretsClient implements SecretsClient {
           staticProperties: s.staticProperties,
         };
         if (s.name !== undefined) ref.name = s.name;
-        const binding = parseBinding(s.staticProperties);
-        if (binding) ref.binding = binding;
+        Object.assign(ref, parseBinding(s.staticProperties));
         refs.push(ref);
       }
       if (secrets.length < PAGE_SIZE) break;
