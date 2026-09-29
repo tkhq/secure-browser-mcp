@@ -6,8 +6,9 @@
   "type": "module",
   "scripts": {
     "dev": "bun run src/index.ts",
+    "serve": "bun run src/http.ts",
     "typecheck": "tsc --noEmit",
-    "build": "bun build src/index.ts --target=node --outdir=dist",
+    "build": "bun build src/index.ts src/http.ts --target=node --outdir=dist",
     "fmt": "prettier --write .",
     "fmt:check": "prettier --check .",
     "test": "bun test",
