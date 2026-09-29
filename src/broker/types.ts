@@ -48,6 +48,9 @@ export type SecretRef = {
   staticProperties: Record<string, string>;
   /** Parsed destination binding, if the static properties declare one. */
   binding?: SecretBinding;
+  /** Why the declared binding is unusable. Set instead of `binding`; a
+   * secret with a malformed binding is never fillable. */
+  bindingError?: string;
 };
 
 /**

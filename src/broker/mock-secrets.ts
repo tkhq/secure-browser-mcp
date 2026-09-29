@@ -20,27 +20,71 @@ type MockOptions = {
   approvalDelayMs?: number;
 };
 
-/** Parse a destination binding from static properties, if one is declared. */
+/**
+ * Parse a destination binding from static properties. Returns `{}` when no
+ * `sbm:origin` is declared, and `{ bindingError }` when a declared part is
+ * malformed. A malformed part never falls back to a looser binding: a bad
+ * `sbm:fields` must not turn a card secret into an origin-only one.
+ */
 export function parseBinding(
   staticProperties: Record<string, string>,
-): SecretBinding | undefined {
+): Pick<SecretRef, "binding" | "bindingError"> {
   const origin = staticProperties[BINDING_KEYS.origin];
-  if (!origin) return undefined;
-  const binding: SecretBinding = { origin };
-  const urlPattern = staticProperties[BINDING_KEYS.urlPattern];
-  if (urlPattern) binding.urlPattern = urlPattern;
-  const selector = staticProperties[BINDING_KEYS.selector];
-  if (selector) binding.selector = selector;
-  const fields = staticProperties[BINDING_KEYS.fields];
-  if (fields) {
-    try {
-      binding.fields = JSON.parse(fields) as Record<string, string>;
-    } catch {
-      // An unparseable fields map means the binding cannot be satisfied;
-      // leave it unset so multi-field fills are refused outright.
-    }
+  if (origin === undefined) return {};
+  const invalid = (reason: string) => ({ bindingError: reason });
+
+  let parsedOrigin: string;
+  try {
+    parsedOrigin = new URL(origin).origin;
+  } catch {
+    return invalid(`${BINDING_KEYS.origin} is not a URL`);
   }
-  return binding;
+  if (parsedOrigin === "null" || parsedOrigin !== origin) {
+    return invalid(
+      `${BINDING_KEYS.origin} must be an origin like https://example.com`,
+    );
+  }
+  const binding: SecretBinding = { origin };
+
+  const urlPattern = staticProperties[BINDING_KEYS.urlPattern];
+  if (urlPattern !== undefined) {
+    try {
+      new URLPattern({ pathname: urlPattern, baseURL: origin });
+    } catch {
+      return invalid(`${BINDING_KEYS.urlPattern} is not a valid URL pattern`);
+    }
+    binding.urlPattern = urlPattern;
+  }
+
+  const selector = staticProperties[BINDING_KEYS.selector];
+  if (selector !== undefined) {
+    if (!selector.trim()) return invalid(`${BINDING_KEYS.selector} is empty`);
+    binding.selector = selector;
+  }
+
+  const fields = staticProperties[BINDING_KEYS.fields];
+  if (fields !== undefined) {
+    let map: unknown;
+    try {
+      map = JSON.parse(fields);
+    } catch {
+      return invalid(`${BINDING_KEYS.fields} is not JSON`);
+    }
+    const entries =
+      map && typeof map === "object" && !Array.isArray(map)
+        ? Object.entries(map)
+        : [];
+    if (
+      entries.length === 0 ||
+      entries.some(([k, v]) => !k || typeof v !== "string" || !v.trim())
+    ) {
+      return invalid(
+        `${BINDING_KEYS.fields} must map payload keys to CSS selectors`,
+      );
+    }
+    binding.fields = Object.fromEntries(entries) as Record<string, string>;
+  }
+  return { binding };
 }
 
 /**
@@ -70,8 +114,7 @@ export class MockSecretsClient implements SecretsClient {
         name: s.name,
         staticProperties: s.staticProperties,
       };
-      const binding = parseBinding(s.staticProperties);
-      if (binding) ref.binding = binding;
+      Object.assign(ref, parseBinding(s.staticProperties));
       return ref;
     });
   }

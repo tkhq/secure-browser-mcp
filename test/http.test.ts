@@ -19,6 +19,7 @@ import { McpStdioClient } from "./mcp-client.js";
 
 const TOKEN = "test-token";
 const DEMO_PLAINTEXT = "mock-demo-p@ssw0rd-1234"; // mock-secrets.ts seed
+const CARD_NUMBER = "4242424242424242"; // mock-secrets.ts demo-card seed
 const stateDir = mkdtempSync(join(tmpdir(), "sbm-state-"));
 const stateKey = randomBytes(32).toString("hex");
 const port = 18_000 + Math.floor(Math.random() * 2_000);
@@ -46,7 +47,7 @@ async function startBroker(): Promise<BrokerProcess> {
       SBM_HTTP_PORT: String(port),
       SBM_STATE_DIR: stateDir,
       SBM_STATE_KEY: stateKey,
-      SBM_MOCK_CONSENSUS: "demo-login-password",
+      SBM_MOCK_CONSENSUS: "demo-login-password,demo-card",
       SBM_MOCK_CONSENSUS_DELAY_MS: "2000",
     },
   });
@@ -235,7 +236,60 @@ test("a pending fill survives a broker restart", async () => {
   await after.client.close();
 }, 60_000);
 
+test("await_fill refuses to re-target a card fill at an unkeyed element", async () => {
+  const s = await connect();
+  const refs = (await s.call("list_secret_refs")).body.refs;
+  const cardId = refs.find((r: { name?: string }) => r.name === "demo-card")
+    .secretId as string;
+
+  await s.call("navigate", { url: `${FIXTURE_ORIGIN}/checkout` });
+  const snap = (await s.call("snapshot")).body;
+  const byName = (name: string) =>
+    snap.elements.find((e: { name?: string }) => e.name === name).uid as string;
+  const cardFields = ["cardNumber", "cardExpiry", "cardCvc"];
+
+  const parked = (
+    await s.call("fill_secret", {
+      secret_id: cardId,
+      fields: [
+        { key: "number", element_uid: byName("cardNumber") },
+        { key: "expiry", element_uid: byName("cardExpiry") },
+        { key: "cvc", element_uid: byName("cardCvc") },
+      ],
+    })
+  ).body;
+  expect(parked.status).toBe("pending_approval");
+
+  // The re-target path runs the same checks as fill_secret: an unkeyed
+  // element_uid would put the whole JSON payload into one field.
+  const unkeyed = await s.call("await_fill", {
+    fill_id: parked.fill_id,
+    element_uid: byName("cardName"),
+    timeout_seconds: 5,
+  });
+  expect(unkeyed.isError).toBe(true);
+  expect(unkeyed.text).toContain("fill each part by key");
+
+  // A refused re-target leaves the parked targets in place.
+  const done = await s.call("await_fill", {
+    fill_id: parked.fill_id,
+    timeout_seconds: 10,
+  });
+  expect(done.body).toMatchObject({ filled: true, secret_id: cardId });
+  expect(done.body.element_uids).toEqual(cardFields.map(byName));
+
+  const after = (await s.call("snapshot")).body;
+  const value = (name: string) =>
+    after.elements.find((e: { name?: string }) => e.name === name)?.value;
+  for (const name of cardFields) {
+    expect(value(name)).toBe("[REDACTED:secret-filled-field]");
+  }
+  expect(value("cardName")).not.toBe("[REDACTED:secret-filled-field]");
+  await s.client.close();
+}, 60_000);
+
 test("the plaintext never appeared in any HTTP response", () => {
   expect(transcript.length).toBeGreaterThan(0);
   expect(transcript).not.toContain(DEMO_PLAINTEXT);
+  expect(transcript).not.toContain(CARD_NUMBER);
 });
