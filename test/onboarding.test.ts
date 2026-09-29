@@ -3,6 +3,11 @@ import { parseImport, runImport } from "../scripts/import-secret.js";
 import { listSecretRefs } from "../src/tools/list-secret-refs.js";
 import { MockSecretsClient } from "../src/broker/mock-secrets.js";
 import { BindingPolicy } from "../src/broker/binding.js";
+import {
+  MemoryPendingFillStore,
+  scopedFills,
+} from "../src/broker/pending-store.js";
+import { LocalChromeHost } from "../src/browser/hosts.js";
 import { BrowserSession } from "../src/browser/session.js";
 import { RedactionRegistry } from "../src/redaction/registry.js";
 
@@ -135,13 +140,12 @@ for (const backend of ["mock", "turnkey"] as const) {
       {
         backend,
         secrets,
-        session: new BrowserSession({
-          executablePath: "/unused",
-          headless: true,
-        }),
+        session: new BrowserSession(
+          new LocalChromeHost({ executablePath: "/unused" }),
+        ),
         registry: new RedactionRegistry(),
         binding: new BindingPolicy(),
-        pendingFills: new Map(),
+        pendingFills: scopedFills(new MemoryPendingFillStore(), "test"),
       },
       {},
     );

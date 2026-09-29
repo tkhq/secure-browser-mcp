@@ -1,19 +1,6 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import type { Browser, CDPSession, ElementHandle, Page } from "puppeteer-core";
 
-import puppeteer, {
-  type Browser,
-  type CDPSession,
-  type ElementHandle,
-  type Page,
-} from "puppeteer-core";
-
-export type BrowserSessionConfig = {
-  /** Path to a Chrome/Chromium executable. */
-  executablePath: string;
-  headless?: boolean;
-};
+import type { BrowserHost } from "./hosts.js";
 
 /** A snapshot-resolved element the broker can act on. */
 export type ResolvedElement = {
@@ -24,9 +11,10 @@ export type ResolvedElement = {
 
 /**
  * Owns the browser exclusively. The security model requires that nothing
- * else can reach this browser: fresh profile, no extensions, and the CDP
- * endpoint bound so only this process can connect. If another debugger can
- * attach, the redaction layer is theater.
+ * else can reach this browser: fresh profile, no extensions, and a CDP
+ * channel only this process holds. If another debugger can attach, the
+ * redaction layer is theater. Where the browser runs is the host's job
+ * (src/browser/hosts.ts); what counts as "nothing else" depends on the host.
  */
 export class BrowserSession {
   private browser: Browser | undefined;
@@ -34,29 +22,23 @@ export class BrowserSession {
   private cdp: CDPSession | undefined;
   private elements = new Map<string, ResolvedElement>();
 
-  constructor(private readonly config: BrowserSessionConfig) {}
+  constructor(private readonly host: BrowserHost) {}
 
   async ensureStarted(): Promise<Page> {
     if (this.page && !this.page.isClosed()) return this.page;
 
-    const userDataDir = await mkdtemp(join(tmpdir(), "sbm-profile-"));
-    this.browser = await puppeteer.launch({
-      executablePath: this.config.executablePath,
-      headless: this.config.headless ?? true,
-      // pipe:true = --remote-debugging-pipe. No TCP debugging port exists,
-      // so nothing else on the host can attach a debugger to this browser.
-      pipe: true,
-      // Fill the window instead of puppeteer's fixed 800x600 emulation —
-      // headed demos otherwise render in a letterboxed region.
-      defaultViewport: null,
-      userDataDir,
-      args: [
-        "--disable-extensions",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-background-networking",
-        "--disable-sync",
-      ],
+    // Release whatever the host still holds (a closed page, or a remote
+    // session that dropped) before starting fresh.
+    await this.host.stop();
+    this.browser = await this.host.start();
+
+    // A remote browser can end on its own (session timeout, network). Drop
+    // the page so the next call starts a fresh session instead of failing.
+    this.browser.on("disconnected", () => {
+      this.clearElements();
+      this.page = undefined;
+      this.cdp = undefined;
+      this.browser = undefined;
     });
 
     const pages = await this.browser.pages();
@@ -107,7 +89,7 @@ export class BrowserSession {
 
   async close(): Promise<void> {
     this.clearElements();
-    await this.browser?.close();
+    await this.host.stop();
     this.browser = undefined;
     this.page = undefined;
     this.cdp = undefined;

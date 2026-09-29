@@ -1,16 +1,20 @@
 import type { ExportedSecret, SecretRef } from "./types.js";
 
 /**
- * A consensus-gated export waiting on approvals. Safe to hold in broker
- * memory and to surface BY ID to the agent; the decryption key it corresponds
- * to stays inside the SecretsClient implementation and dies with the broker
- * process — a restart makes the pending export unredeemable by design.
+ * A consensus-gated export waiting on approvals. Surfaced to the agent BY ID
+ * only. `material` carries what the SecretsClient needs to redeem the export
+ * after approval (for Turnkey: the proposal and the ephemeral decryption
+ * key), so a pending export is plain data the broker can persist and redeem
+ * after a restart. It is key material: it never goes into a tool result, and
+ * the persistent store encrypts it at rest (see src/broker/pending-store.ts).
  */
 export interface PendingExport {
   ref: SecretRef;
   /** Turnkey activity id approvers act on (mock ids in the mock backend). */
   activityId: string;
   fingerprint: string;
+  /** Opaque, backend-owned JSON string. Secret: never serialize to the agent. */
+  material: string;
 }
 
 /**
