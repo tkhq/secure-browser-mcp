@@ -38,18 +38,20 @@ export const awaitFill = defineTool({
 
     // New destinations replace the parked ones. They pass the same binding
     // checks, so this lets the agent point at a fresh snapshot, not at a
-    // destination fill_secret would refuse.
+    // destination fill_secret would refuse. They are checked before they
+    // replace anything: a refused re-target leaves the parked targets as-is.
     if (args.element_uid !== undefined || args.fields !== undefined) {
       const specs = specsFromArgs(args);
       if (!specs)
         throw new Error("Provide at most one of element_uid or fields");
+      await validateOrExplain(ctx, fill, specs);
       fill.targets = specs;
       await ctx.pendingFills.put(fill);
+    } else {
+      // Check the destination before waiting, so a stale page is reported
+      // now rather than after the approver acts. The fill stays parked.
+      await validateOrExplain(ctx, fill);
     }
-
-    // Check the destination before waiting, so a stale page is reported
-    // now rather than after the approver acts. The fill stays parked.
-    await validateOrExplain(ctx, fill);
 
     // Wait for quorum. Timeout is not failure: report pending and keep the
     // fill; rejection or backend failure kills it.
@@ -95,9 +97,13 @@ export const awaitFill = defineTool({
   },
 });
 
-async function validateOrExplain(ctx: ToolContext, fill: PendingFill) {
+async function validateOrExplain(
+  ctx: ToolContext,
+  fill: PendingFill,
+  targets = fill.targets,
+) {
   try {
-    return await validateTargets(ctx, fill.pending.ref, fill.targets);
+    return await validateTargets(ctx, fill.pending.ref, targets);
   } catch (err) {
     if (err instanceof Error && /Unknown element uid/i.test(err.message)) {
       throw new Error(
