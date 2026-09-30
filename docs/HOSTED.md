@@ -84,6 +84,8 @@ docker run --rm -p 8080:8080 \
 
 The default image has no Chrome. It runs session browsers on Browserbase, so it needs no seccomp changes, no extra memory for browsers, and no access to internal networks.
 
+CI (`.github/workflows/build.yml`) builds this image on every pull request and, on each push to `main`, pushes it to Turnkey's internal registry tagged `main-<commit sha>`. The deployment manifests pin one of those tags.
+
 ### Local Chrome in a container
 
 Build with `--build-arg LOCAL_CHROME=true` and run with `-e SBM_BROWSER=local` to keep browsers in the container. The image runs Chromium with its sandbox on, as a non-root user. The Chrome sandbox needs unprivileged user namespaces:
