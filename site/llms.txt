@@ -1,0 +1,25 @@
+# Secure Browser MCP
+
+Secure Browser MCP is a credential broker for browser-using agents. It lets an agent navigate and operate a browser while credential values remain in Turnkey Secrets and are injected directly into the browser.
+
+## Key capabilities
+
+- Discover opaque secret references and their immutable destination bindings.
+- Navigate, inspect, click, and type non-secret text through a broker-owned browser.
+- Fill bound credentials by reference, including approval-gated fills.
+
+## Security constraints
+
+- Secret values never appear in model context, MCP output, or logs.
+- A fill must match the secret's origin and may be constrained by URL pattern, selector, and fields.
+- Filled values are redacted in snapshots; arbitrary script evaluation is intentionally unavailable.
+- A pending approval is revalidated against the live destination before injection.
+
+## Documentation
+
+- Overview: https://tkhq.github.io/secure-browser-mcp/ | Markdown: https://tkhq.github.io/secure-browser-mcp/index.md
+- Setup: https://tkhq.github.io/secure-browser-mcp/setup.html | Markdown: https://tkhq.github.io/secure-browser-mcp/setup.md
+- Workflow guide: https://tkhq.github.io/secure-browser-mcp/docs.html | Markdown: https://tkhq.github.io/secure-browser-mcp/docs.md
+- MCP reference: https://tkhq.github.io/secure-browser-mcp/reference.html | Markdown: https://tkhq.github.io/secure-browser-mcp/reference.md
+
+Source and detailed security documentation: https://github.com/tkhq/secure-browser-mcp

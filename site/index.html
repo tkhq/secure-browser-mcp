@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      name="description"
+      content="A secure MCP browser that fills credentials without exposing them to an agent."
+    />
+    <title>Secure Browser MCP</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <div class="shell nav">
+        <a class="brand" href="index.html">secure<span>browser</span> mcp</a>
+        <nav>
+          <a aria-current="page" href="index.html">Overview</a
+          ><a href="setup.html">Setup</a><a href="docs.html">Docs</a
+          ><a href="reference.html">Reference</a>
+        </nav>
+      </div>
+    </header>
+    <main class="shell">
+      <section class="hero">
+        <div class="eyebrow">Credentials without context leakage</div>
+        <h1>Give agents a browser.<br />Not your passwords.</h1>
+        <p class="lede">
+          Secure Browser MCP lets an agent log in, check out, and fill forms
+          while credentials remain in Turnkey Secrets. The agent receives a
+          reference; the broker injects the secret directly into the browser.
+        </p>
+        <div class="actions">
+          <a class="button" href="setup.html">Set it up</a
+          ><a
+            class="button secondary"
+            href="https://github.com/tkhq/secure-browser-mcp"
+            >View on GitHub</a
+          >
+        </div>
+      </section>
+      <section class="grid">
+        <article class="card">
+          <h3>Bound at import</h3>
+          <p>
+            Secrets are constrained to an origin, URL pattern, selector, or a
+            defined group of fields before an agent can request a fill.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Approval when it matters</h3>
+          <p>
+            Turnkey consensus can park an export for human approval. The page is
+            re-validated immediately before a fill completes.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Designed to be boring</h3>
+          <p>
+            No secret values in model context, MCP output, or logs. There is no
+            arbitrary script-evaluation tool.
+          </p>
+        </article>
+      </section>
+    </main>
+    <footer>
+      <div class="shell">
+        Secure Browser MCP · A credential broker for browser-using agents ·
+        <a href="index.md">Markdown</a>
+      </div>
+    </footer>
+  </body>
+</html>
