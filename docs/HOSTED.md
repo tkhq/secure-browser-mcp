@@ -19,20 +19,21 @@ Keep `SBM_STATE_KEY` stable across restarts. A different key cannot read the par
 
 ## Configuration
 
-| Variable                    | Default           | Purpose                                                                                                                           |
-| --------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `SBM_HTTP_TOKEN`            | (required)        | Clients send `Authorization: Bearer <token>`. The broker refuses to start without it.                                             |
-| `SBM_HTTP_HOST`             | `127.0.0.1`       | Listen address. The container image sets `0.0.0.0`.                                                                               |
-| `SBM_HTTP_PORT`             | `8080`            | Listen port.                                                                                                                      |
-| `SBM_STATE_DIR`             | (none)            | Directory for parked fills. Without it, a restart strands every pending approval.                                                 |
-| `SBM_STATE_KEY`             | (none)            | 32-byte key, 64 hex characters or base64. Required with `SBM_STATE_DIR`.                                                          |
-| `SBM_BROWSER`               | `local`           | Where session browsers run: `local` (Chrome on this host) or `browserbase`. The image sets `browserbase`.                         |
-| `BROWSERBASE_API_KEY`       | (none)            | Required with `SBM_BROWSER=browserbase`.                                                                                          |
-| `BROWSERBASE_PROJECT_ID`    | (first project)   | Browserbase project for sessions.                                                                                                 |
-| `SBM_BROWSERBASE_TIMEOUT_S` | (project default) | Maximum Browserbase session length, in seconds.                                                                                   |
-| `SBM_MAX_SESSIONS`          | `8`               | Concurrent agent sessions. Each session gets its own browser. On Browserbase, keep this at or below the plan's concurrency limit. |
-| `SBM_SESSION_IDLE_S`        | `1800`            | The broker closes a session, and its browser, after this many idle seconds.                                                       |
-| `SBM_CHROME_ARGS`           | (none)            | Local Chrome only. Extra Chrome flags, separated by spaces.                                                                       |
+| Variable                    | Default           | Purpose                                                                                                                                                             |
+| --------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SBM_HTTP_TOKEN`            | (required)        | Clients send `Authorization: Bearer <token>`. The broker refuses to start without it.                                                                               |
+| `SBM_HTTP_HOST`             | `127.0.0.1`       | Listen address. The container image sets `0.0.0.0`.                                                                                                                 |
+| `SBM_HTTP_PORT`             | `8080`            | Listen port.                                                                                                                                                        |
+| `SBM_STATE_DIR`             | (none)            | Directory for parked fills. Without it, a restart strands every pending approval.                                                                                   |
+| `SBM_STATE_KEY`             | (none)            | 32-byte key, 64 hex characters or base64. Required with `SBM_STATE_DIR`.                                                                                            |
+| `TURNKEY_SIGNER_PUBLIC_KEY` | (SDK default)     | Enclave quorum key that signs secret bundles. Required when `TURNKEY_API_BASE_URL` points at a Turnkey environment with its own enclaves; production needs nothing. |
+| `SBM_BROWSER`               | `local`           | Where session browsers run: `local` (Chrome on this host) or `browserbase`. The image sets `browserbase`.                                                           |
+| `BROWSERBASE_API_KEY`       | (none)            | Required with `SBM_BROWSER=browserbase`.                                                                                                                            |
+| `BROWSERBASE_PROJECT_ID`    | (first project)   | Browserbase project for sessions.                                                                                                                                   |
+| `SBM_BROWSERBASE_TIMEOUT_S` | (project default) | Maximum Browserbase session length, in seconds.                                                                                                                     |
+| `SBM_MAX_SESSIONS`          | `8`               | Concurrent agent sessions. Each session gets its own browser. On Browserbase, keep this at or below the plan's concurrency limit.                                   |
+| `SBM_SESSION_IDLE_S`        | `1800`            | The broker closes a session, and its browser, after this many idle seconds.                                                                                         |
+| `SBM_CHROME_ARGS`           | (none)            | Local Chrome only. Extra Chrome flags, separated by spaces.                                                                                                         |
 
 The `TURNKEY_*` variables and the other `SBM_*` variables work as in the stdio broker. Step 1 uses one Turnkey API key for every session.
 

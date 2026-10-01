@@ -9,6 +9,7 @@ import {
 } from "./secrets-client.js";
 import type { ExportedSecret, SecretRef } from "./types.js";
 import { parseBinding } from "./mock-secrets.js";
+import { signerOverrideFromEnv } from "./turnkey-env.js";
 
 /** Proposal shape returned by createExportSecretsProposal; the broker only
  * needs to carry it opaquely between submit and await. */
@@ -145,6 +146,7 @@ export class TurnkeySecretsClient implements SecretsClient {
       proposal,
       activityId,
       embeddedPrivateKey: privateKey,
+      ...signerOverrideFromEnv(),
     });
     if (value === undefined) {
       throw new Error(`Export of ${ref.secretId} returned no payload`);

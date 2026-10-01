@@ -2,7 +2,10 @@
 import { parseArgs } from "node:util";
 import { createInterface } from "node:readline/promises";
 import { BINDING_KEYS } from "../src/broker/types.js";
-import { turnkeyClientFromEnv } from "../src/broker/turnkey-env.js";
+import {
+  signerOverrideFromEnv,
+  turnkeyClientFromEnv,
+} from "../src/broker/turnkey-env.js";
 
 class InputError extends Error {}
 const fail = (message: string): never => {
@@ -113,7 +116,11 @@ export function parseImport(args: string[], env: NodeJS.ProcessEnv) {
 }
 
 type ImportClient = {
-  importSecret: (input: ReturnType<typeof parseImport>) => Promise<string>;
+  importSecret: (
+    input: ReturnType<typeof parseImport> & {
+      dangerouslyOverrideSignerPublicKey?: string;
+    },
+  ) => Promise<string>;
 };
 export async function runImport(
   args: string[],
@@ -147,7 +154,10 @@ export async function runImport(
   // Do not print SDK errors: they may contain request data or plaintext.
   let secretId: string;
   try {
-    secretId = await client.importSecret(input);
+    secretId = await client.importSecret({
+      ...input,
+      ...signerOverrideFromEnv(),
+    });
   } catch {
     return fail(
       "Turnkey import failed; details withheld to protect secret material. Check access and existing secrets before retrying; the request may have succeeded.",
