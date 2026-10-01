@@ -39,6 +39,7 @@ function specsKey(secretId: string, specs: FillFieldSpec[]): string {
 
 export const fillSecret = defineTool({
   name: "fill_secret",
+  scope: "sbm:fill",
   description:
     "Fill a secret into form fields, by reference. The secret value is " +
     "exported from Turnkey, injected via CDP, and never enters this " +

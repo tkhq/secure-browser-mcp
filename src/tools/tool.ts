@@ -1,5 +1,6 @@
 import type { ZodRawShape, objectOutputType, ZodTypeAny } from "zod";
 
+import type { Scope } from "../auth/scopes.js";
 import type { BindingPolicy } from "../broker/binding.js";
 import type { PendingFills } from "../broker/pending-store.js";
 import type { SecretsClient } from "../broker/secrets-client.js";
@@ -33,6 +34,9 @@ export type ToolContext = {
  */
 export type ToolDef<Shape extends ZodRawShape = ZodRawShape> = {
   name: string;
+  /** The OAuth scope a hosted caller needs to call this tool
+   * (src/auth/scopes.ts). */
+  scope: Scope;
   description: string;
   inputSchema: Shape;
   handler: (
@@ -44,6 +48,7 @@ export type ToolDef<Shape extends ZodRawShape = ZodRawShape> = {
 /** Type-erased view for the heterogeneous tool registry in server.ts. */
 export type AnyToolDef = {
   name: string;
+  scope: Scope;
   description: string;
   inputSchema: ZodRawShape;
   handler: (ctx: ToolContext, args: never) => Promise<unknown>;
