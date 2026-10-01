@@ -138,7 +138,10 @@ async function main(): Promise<void> {
     // The session id doubles as the owner of this session's pending fills,
     // so it is fixed before the context is built.
     const id = randomUUID();
-    const ctx = sessionContext(broker, scopedFills(store, id, isLive));
+    const ctx = sessionContext(
+      broker,
+      scopedFills(store, { owner: id, principal: "shared-token", isLive }),
+    );
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => id,
       onsessioninitialized: () => {
