@@ -22,6 +22,26 @@ export function turnkeyClientFromEnv(): TurnkeyApiClient | undefined {
 }
 
 /**
+ * Public key of the enclave quorum that signs secret import and export
+ * bundles. The SDK pins production's key; a Turnkey environment with its own
+ * enclaves (TURNKEY_API_BASE_URL on turnkey.engineering) needs its key here,
+ * or every import and export fails signature verification. Undefined means
+ * the SDK default.
+ */
+export function signerPublicKeyFromEnv(): string | undefined {
+  const key = process.env["TURNKEY_SIGNER_PUBLIC_KEY"]?.trim();
+  return key ? key : undefined;
+}
+
+/** Spread into an SDK import/export call to apply the configured signer key. */
+export function signerOverrideFromEnv(): {
+  dangerouslyOverrideSignerPublicKey?: string;
+} {
+  const key = signerPublicKeyFromEnv();
+  return key ? { dangerouslyOverrideSignerPublicKey: key } : {};
+}
+
+/**
  * Dashboard page for a Turnkey activity, so approvers can be sent a link
  * instead of a bare id. Derived from TURNKEY_API_BASE_URL (api.turnkey.com →
  * app.turnkey.com, api.<env>.turnkey.engineering → app.<env>.turnkey.engineering);

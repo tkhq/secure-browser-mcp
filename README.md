@@ -61,6 +61,8 @@ export TURNKEY_API_PRIVATE_KEY=...
 export TURNKEY_ORGANIZATION_ID=...
 ```
 
+`TURNKEY_API_BASE_URL` selects the Turnkey environment (default `https://api.turnkey.com`). An environment with its own enclaves also needs `TURNKEY_SIGNER_PUBLIC_KEY`, the quorum key that signs its secret bundles; without it every import and export fails signature verification.
+
 To import your own credential, use `bun run scripts/import-secret.ts --help` and follow the [generic import walkthrough](docs/HERMES.md#import-your-own-secret). `list_secret_refs` reports the active `backend` alongside references. Cross-origin iframe inputs (including embedded Stripe Elements) are currently unsupported; verify the broker can see your target fields before importing.
 
 A secret is fillable when it is imported with binding static properties: `sbm:origin` (required), `sbm:url-pattern`, `sbm:selector`, or `sbm:fields` for JSON payloads — see `src/broker/types.ts`. Bindings are immutable after import. A secret with a malformed binding is never fillable, and a secret with `sbm:fields` fills only by key.
