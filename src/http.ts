@@ -1,26 +1,40 @@
 /**
  * Hosted entrypoint: the same tool surface as src/index.ts, served as MCP
- * Streamable HTTP at /mcp for agent platforms that connect by URL.
+ * Streamable HTTP for agent platforms that connect by URL.
  *
  * This is a Turnkey-operated fill service (design 1 in EMG-89): the broker
  * and its browsers run here, so secret plaintext exists in this process
  * during a fill. See docs/THREAT-MODEL.md ("Hosted broker").
  *
- * Each MCP session gets its own ToolContext: its own Chrome process, its own
- * redaction registry, and a view of the pending-fill store that shows only
- * its own fills. Closing the session (DELETE, idle timeout, or shutdown)
- * closes its browser.
+ * Tenants. Each tenant in SBM_TENANTS has its own endpoint, /t/{id}/mcp,
+ * and the broker is an OAuth 2.1 resource server for it (docs/HOSTED.md,
+ * "Authorization"): requests carry a JWT access token from one of the
+ * tenant's trusted issuers, for audience SBM_PUBLIC_URL + /t/{id}/mcp, with
+ * the scope each called tool needs. A tenant's sessions use its own Turnkey
+ * organization and API key and its own encrypted pending-fill store.
+ *
+ * Sessions. Each MCP session gets its own ToolContext (its own browser,
+ * redaction registry, and view of the pending fills) and is bound to the
+ * tenant and token subject that opened it. Closing the session (DELETE,
+ * idle timeout, or shutdown) closes its browser.
  *
  * Environment:
- *   SBM_HTTP_TOKEN      required. Clients send `Authorization: Bearer <token>`.
+ *   SBM_TENANTS         path to the tenant config file (docs/HOSTED.md)
+ *   SBM_PUBLIC_URL      origin clients use, e.g. https://sbm.example.com;
+ *                       token audiences are built from it
  *   SBM_HTTP_HOST       listen address (default 127.0.0.1; 0.0.0.0 in the image)
  *   SBM_HTTP_PORT       listen port (default 8080)
  *   SBM_STATE_DIR       directory for encrypted pending fills. Without it,
  *                       pending fills are in memory and a restart strands them.
- *   SBM_STATE_KEY       32-byte key (hex or base64), required with SBM_STATE_DIR
+ *   SBM_STATE_KEY       32-byte key (hex or base64), required with
+ *                       SBM_STATE_DIR. Each tenant's key is derived from it.
  *   SBM_MAX_SESSIONS    concurrent agent sessions (default 8)
  *   SBM_SESSION_IDLE_S  close sessions idle this long (default 1800)
- * plus the TURNKEY_* and SBM_* variables the stdio broker reads.
+ *   SBM_DEV_SHARED_TOKEN=1 with SBM_HTTP_TOKEN
+ *                       development only: also serve /mcp behind one shared
+ *                       bearer token, with the TURNKEY_* key (or the mock)
+ * plus TURNKEY_API_BASE_URL and the SBM_* browser variables the stdio
+ * broker reads.
  */
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import {
@@ -28,27 +42,78 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { join } from "node:path";
 
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 
 import {
+  protectedResourceMetadata,
+  wwwAuthenticate,
+  type Challenge,
+} from "./auth/challenge.js";
+import { SCOPES } from "./auth/scopes.js";
+import {
+  loadTenants,
+  metadataUri,
+  parsePublicUrl,
+  resourceUri,
+  tenantPath,
+  type TenantConfig,
+} from "./auth/tenants.js";
+import { JwksCache, verifyAccessToken } from "./auth/tokens.js";
+import {
   FilePendingFillStore,
   MemoryPendingFillStore,
   parseStateKey,
   scopedFills,
+  tenantStateKey,
 } from "./broker/pending-store.js";
-import { makeBroker, sessionContext } from "./runtime.js";
-import { createServer } from "./server.js";
+import {
+  makeBroker,
+  sessionContext,
+  tenantSecretsClient,
+  type Broker,
+} from "./runtime.js";
+import { createServer, TOOLS } from "./server.js";
 import type { ToolContext } from "./tools/tool.js";
 
 const MAX_BODY_BYTES = 1_000_000;
+
+/** Where the shared-token dev endpoint keeps its fills. Not a valid tenant
+ * id, so it cannot collide with one. */
+const DEV_ENDPOINT_ID = "_shared-token";
+
+const SCOPE_BY_TOOL = new Map(TOOLS.map((t) => [t.name, t.scope]));
+
+/** The caller a request was authenticated as. */
+type Caller = {
+  /** Stable id for session and pending-fill binding. */
+  principal: string;
+  scopes: ReadonlySet<string>;
+};
+
+type AuthResult =
+  | { ok: true; caller: Caller }
+  | { ok: false; challenge: Omit<Challenge, "resourceMetadata" | "scopes"> };
+
+/** One MCP endpoint: a tenant, or the dev shared-token endpoint. */
+type Endpoint = {
+  id: string;
+  broker: Broker;
+  store: MemoryPendingFillStore;
+  authenticate: (req: IncomingMessage) => Promise<AuthResult>;
+  /** Absent for the dev endpoint, which has no OAuth metadata. */
+  resourceMetadata?: string;
+};
 
 type Session = {
   transport: StreamableHTTPServerTransport;
   ctx: ToolContext;
   lastSeen: number;
+  endpoint: string;
+  principal: string;
 };
 
 function envInt(name: string, fallback: number): number {
@@ -61,27 +126,120 @@ function envInt(name: string, fallback: number): number {
   return n;
 }
 
-function makeStore(): MemoryPendingFillStore {
+function envFlag(name: string): boolean {
+  return ["1", "true"].includes((process.env[name] ?? "").toLowerCase());
+}
+
+/** A store per endpoint: its own directory, under its own derived key. */
+function storeFactory(): (endpointId: string) => MemoryPendingFillStore {
   const dir = process.env["SBM_STATE_DIR"];
   if (!dir) {
     console.error(
       "secure-browser-mcp: SBM_STATE_DIR unset; pending fills do not " +
         "survive a restart",
     );
-    return new MemoryPendingFillStore();
+    return () => new MemoryPendingFillStore();
   }
   const key = process.env["SBM_STATE_KEY"];
   if (!key) throw new Error("SBM_STATE_DIR requires SBM_STATE_KEY");
-  return new FilePendingFillStore(dir, parseStateKey(key));
+  const master = parseStateKey(key);
+  return (id) =>
+    new FilePendingFillStore(
+      join(dir, "tenants", id),
+      tenantStateKey(master, id),
+    );
 }
 
-/** Constant-time bearer check; compares digests so lengths do not leak. */
-function authorized(req: IncomingMessage, token: string): boolean {
+function bearerToken(req: IncomingMessage): string | undefined {
   const header = req.headers.authorization ?? "";
-  const match = /^Bearer (.+)$/i.exec(header);
-  if (!match) return false;
+  return /^Bearer ([A-Za-z0-9._~+/-]+=*)$/i.exec(header)?.[1];
+}
+
+/** Constant-time compare; compares digests so lengths do not leak. */
+function sameSecret(a: string, b: string): boolean {
   const digest = (s: string) => createHash("sha256").update(s).digest();
-  return timingSafeEqual(digest(match[1]!), digest(token));
+  return timingSafeEqual(digest(a), digest(b));
+}
+
+function tenantEndpoint(
+  publicUrl: string,
+  tenant: TenantConfig,
+  jwks: JwksCache,
+  makeStore: (id: string) => MemoryPendingFillStore,
+): Endpoint {
+  const audience = resourceUri(publicUrl, tenant.id);
+  return {
+    id: tenant.id,
+    broker: makeBroker(tenantSecretsClient(tenant)),
+    store: makeStore(tenant.id),
+    resourceMetadata: metadataUri(publicUrl, tenant.id),
+    authenticate: async (req) => {
+      const token = bearerToken(req);
+      if (!token) return { ok: false, challenge: {} };
+      try {
+        const p = await verifyAccessToken(
+          token,
+          { audience, issuers: tenant.issuers },
+          jwks,
+        );
+        return {
+          ok: true,
+          caller: {
+            principal: JSON.stringify([p.issuer, p.subject]),
+            scopes: p.scopes,
+          },
+        };
+      } catch {
+        // Fail closed on every error, including an unreachable JWKS.
+        return {
+          ok: false,
+          challenge: {
+            error: "invalid_token",
+            description: "The access token is not valid for this resource",
+          },
+        };
+      }
+    },
+  };
+}
+
+function devEndpoint(
+  token: string,
+  makeStore: (id: string) => MemoryPendingFillStore,
+): Endpoint {
+  return {
+    id: DEV_ENDPOINT_ID,
+    broker: makeBroker(),
+    store: makeStore(DEV_ENDPOINT_ID),
+    authenticate: async (req) => {
+      const presented = bearerToken(req);
+      if (presented && sameSecret(presented, token)) {
+        return {
+          ok: true,
+          caller: { principal: DEV_ENDPOINT_ID, scopes: new Set(SCOPES) },
+        };
+      }
+      return {
+        ok: false,
+        challenge: presented ? { error: "invalid_token" } : {},
+      };
+    },
+  };
+}
+
+/** Scopes the request's tools/call messages need and the caller lacks. */
+function missingScopes(body: unknown, caller: Caller): string[] {
+  const messages = Array.isArray(body) ? body : [body];
+  const missing = new Set<string>();
+  for (const m of messages) {
+    if (!m || typeof m !== "object" || m.method !== "tools/call") continue;
+    const name = (m.params as { name?: unknown } | undefined)?.name;
+    // Unknown tools need no scope here; the MCP server rejects them.
+    const scope =
+      typeof name === "string" ? SCOPE_BY_TOOL.get(name) : undefined;
+    if (scope && !caller.scopes.has(scope)) missing.add(scope);
+  }
+  return [...missing];
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -113,16 +271,83 @@ function rpcError(res: ServerResponse, status: number, message: string) {
   });
 }
 
+function refuse(
+  res: ServerResponse,
+  status: 401 | 403,
+  endpoint: Endpoint,
+  challenge: Omit<Challenge, "resourceMetadata">,
+) {
+  const header = endpoint.resourceMetadata
+    ? wwwAuthenticate({
+        ...challenge,
+        resourceMetadata: endpoint.resourceMetadata,
+      })
+    : "Bearer";
+  send(
+    res,
+    status,
+    {
+      error: challenge.error ?? "unauthorized",
+      ...(challenge.description
+        ? { error_description: challenge.description }
+        : {}),
+    },
+    { "www-authenticate": header },
+  );
+}
+
 async function main(): Promise<void> {
-  const token = process.env["SBM_HTTP_TOKEN"];
-  if (!token) throw new Error("SBM_HTTP_TOKEN is required");
   const host = process.env["SBM_HTTP_HOST"] ?? "127.0.0.1";
   const port = envInt("SBM_HTTP_PORT", 8080);
   const maxSessions = envInt("SBM_MAX_SESSIONS", 8);
   const idleMs = envInt("SBM_SESSION_IDLE_S", 1800) * 1_000;
+  const makeStore = storeFactory();
 
-  const broker = makeBroker();
-  const store = makeStore();
+  // Tenants: the production path.
+  const tenants = new Map<string, Endpoint>();
+  const metadata = new Map<string, object>();
+  const tenantsPath = process.env["SBM_TENANTS"];
+  if (tenantsPath) {
+    const rawPublicUrl = process.env["SBM_PUBLIC_URL"];
+    if (!rawPublicUrl) throw new Error("SBM_TENANTS requires SBM_PUBLIC_URL");
+    const publicUrl = parsePublicUrl(rawPublicUrl);
+    const jwks = new JwksCache();
+    for (const tenant of loadTenants(tenantsPath)) {
+      tenants.set(
+        tenant.id,
+        tenantEndpoint(publicUrl, tenant, jwks, makeStore),
+      );
+      metadata.set(tenant.id, protectedResourceMetadata(publicUrl, tenant));
+      if (tenant.backend === "mock") {
+        console.error(
+          `secure-browser-mcp: WARNING: tenant ${tenant.id} uses the mock ` +
+            "secrets backend",
+        );
+      }
+    }
+  }
+
+  // The step-1 shared token, kept for local development only.
+  let dev: Endpoint | undefined;
+  const sharedToken = process.env["SBM_HTTP_TOKEN"];
+  if (sharedToken) {
+    if (!envFlag("SBM_DEV_SHARED_TOKEN")) {
+      throw new Error(
+        "SBM_HTTP_TOKEN is for development only: set SBM_DEV_SHARED_TOKEN=1 " +
+          "to serve /mcp with it, or unset it and configure SBM_TENANTS",
+      );
+    }
+    dev = devEndpoint(sharedToken, makeStore);
+    console.error(
+      "secure-browser-mcp: WARNING: SBM_DEV_SHARED_TOKEN is on. /mcp accepts " +
+        "one shared bearer token with every scope and the TURNKEY_* key. " +
+        "Do not use this in production.",
+    );
+  }
+  if (tenants.size === 0 && !dev) {
+    throw new Error("Configure tenants with SBM_TENANTS and SBM_PUBLIC_URL");
+  }
+
   const sessions = new Map<string, Session>();
   const isLive = (owner: string) => sessions.has(owner);
 
@@ -134,18 +359,29 @@ async function main(): Promise<void> {
     await s.transport.close().catch(() => {});
   };
 
-  const openSession = async (): Promise<StreamableHTTPServerTransport> => {
+  const openSession = async (
+    endpoint: Endpoint,
+    caller: Caller,
+  ): Promise<StreamableHTTPServerTransport> => {
     // The session id doubles as the owner of this session's pending fills,
     // so it is fixed before the context is built.
     const id = randomUUID();
-    const ctx = sessionContext(
-      broker,
-      scopedFills(store, { owner: id, principal: "shared-token", isLive }),
-    );
+    const fills = scopedFills(endpoint.store, {
+      owner: id,
+      principal: caller.principal,
+      isLive,
+    });
+    const ctx = sessionContext(endpoint.broker, fills);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => id,
       onsessioninitialized: () => {
-        sessions.set(id, { transport, ctx, lastSeen: Date.now() });
+        sessions.set(id, {
+          transport,
+          ctx,
+          lastSeen: Date.now(),
+          endpoint: endpoint.id,
+          principal: caller.principal,
+        });
       },
     });
     transport.onclose = () => void closeSession(id);
@@ -155,15 +391,42 @@ async function main(): Promise<void> {
     return transport;
   };
 
-  const handleMcp = async (req: IncomingMessage, res: ServerResponse) => {
-    const sessionId = req.headers["mcp-session-id"];
+  const handleMcp = async (
+    endpoint: Endpoint,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ) => {
+    const auth = await endpoint.authenticate(req);
+    if (!auth.ok) {
+      return refuse(res, 401, endpoint, { ...auth.challenge, scopes: SCOPES });
+    }
+    const { caller } = auth;
     const body = req.method === "POST" ? await readJson(req) : undefined;
 
+    // Scopes are checked per request against the token presented with it,
+    // so a session's rights follow its current token.
+    const missing = missingScopes(body, caller);
+    if (missing.length > 0) {
+      return refuse(res, 403, endpoint, {
+        error: "insufficient_scope",
+        description: `This tool requires ${missing.join(" ")}`,
+        scopes: missing,
+      });
+    }
+
+    const sessionId = req.headers["mcp-session-id"];
     if (typeof sessionId === "string") {
       const s = sessions.get(sessionId);
-      // 404 tells the client to start a new session (MCP spec), which is
-      // what happens after a broker restart.
-      if (!s) return rpcError(res, 404, "Session not found");
+      // A session belongs to the endpoint and caller that opened it; to
+      // anyone else it does not exist. 404 tells the client to start a new
+      // session (MCP spec), which is also what happens after a restart.
+      if (
+        !s ||
+        s.endpoint !== endpoint.id ||
+        s.principal !== caller.principal
+      ) {
+        return rpcError(res, 404, "Session not found");
+      }
       s.lastSeen = Date.now();
       return s.transport.handleRequest(req, res, body);
     }
@@ -174,31 +437,56 @@ async function main(): Promise<void> {
     if (sessions.size >= maxSessions) {
       return rpcError(res, 503, "Broker is at its session limit");
     }
-    const transport = await openSession();
+    const transport = await openSession(endpoint, caller);
     await transport.handleRequest(req, res, body);
+  };
+
+  const route = (
+    path: string,
+  ):
+    | { kind: "mcp"; endpoint: Endpoint }
+    | { kind: "metadata"; doc: object }
+    | undefined => {
+    if (path === "/mcp" && dev) return { kind: "mcp", endpoint: dev };
+    const m =
+      /^(\/\.well-known\/oauth-protected-resource)?\/t\/([^/]+)\/mcp$/.exec(
+        path,
+      );
+    if (!m) return undefined;
+    const id = m[2]!;
+    if (m[1]) {
+      const doc = metadata.get(id);
+      return doc ? { kind: "metadata", doc } : undefined;
+    }
+    const endpoint = tenants.get(id);
+    return endpoint && path === tenantPath(id)
+      ? { kind: "mcp", endpoint }
+      : undefined;
   };
 
   const http = createHttpServer((req, res) => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
     if (path === "/healthz") {
-      return send(res, 200, {
-        ok: true,
-        backend: broker.backend,
-        browser: broker.browser,
+      return send(res, 200, { ok: true, tenants: tenants.size });
+    }
+    const target = route(path);
+    if (!target) return send(res, 404, { error: "not found" });
+    if (target.kind === "metadata") {
+      if (req.method !== "GET") {
+        return send(
+          res,
+          405,
+          { error: "method not allowed" },
+          { allow: "GET" },
+        );
+      }
+      // Public metadata; browser-based clients fetch it cross-origin.
+      return send(res, 200, target.doc, {
+        "access-control-allow-origin": "*",
+        "cache-control": "max-age=300",
       });
     }
-    if (path !== "/mcp") return send(res, 404, { error: "not found" });
-    if (!authorized(req, token)) {
-      return send(
-        res,
-        401,
-        { error: "unauthorized" },
-        {
-          "www-authenticate": "Bearer",
-        },
-      );
-    }
-    handleMcp(req, res).catch((err) => {
+    handleMcp(target.endpoint, req, res).catch((err) => {
       console.error("secure-browser-mcp: request failed:", err);
       if (!res.headersSent) rpcError(res, 400, "Bad request");
       else res.end();
@@ -215,11 +503,12 @@ async function main(): Promise<void> {
 
   await new Promise<void>((resolve) => http.listen(port, host, resolve));
   console.error(
-    `secure-browser-mcp: listening on http://${host}:${port}/mcp ` +
-      `(backend: ${broker.backend}, browser: ${broker.browser})`,
+    `secure-browser-mcp: listening on http://${host}:${port} ` +
+      `(tenants: ${[...tenants.keys()].join(", ") || "none"}` +
+      `${dev ? "; dev /mcp" : ""})`,
   );
 
-  // Pending fills stay in the store; browsers do not outlive the process.
+  // Pending fills stay in the stores; browsers do not outlive the process.
   const shutdown = () => {
     http.close();
     void Promise.all([...sessions.keys()].map(closeSession)).finally(() =>
