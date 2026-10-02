@@ -317,11 +317,29 @@ test("a valid token lists the same tools as the stdio broker", async () => {
     .sort();
   await stdio.stop();
 
-  // Listing needs no particular scope.
-  const s = await connect("alpha", await token(asA, "alpha", { scope: "" }));
+  // Any one sbm scope opens a session, and the list is the full surface.
+  const s = await connect(
+    "alpha",
+    await token(asA, "alpha", { scope: "sbm:browse" }),
+  );
   const tools = (await s.client.listTools()).tools.map((t) => t.name).sort();
   expect(tools).toEqual(stdioTools);
   await s.client.close();
+});
+
+test("a token without any sbm scope cannot open a session", async () => {
+  for (const scope of ["", "openid profile"]) {
+    const res = await rpc(
+      "alpha",
+      await token(asA, "alpha", { scope }),
+      initialize,
+    );
+    expect(res.status).toBe(403);
+    expect(res.headers.get("www-authenticate")).toContain(
+      'error="insufficient_scope"',
+    );
+    expect(res.headers.get("mcp-session-id")).toBeNull();
+  }
 });
 
 test("a tool call without its scope gets 403 insufficient_scope", async () => {
@@ -446,6 +464,22 @@ test("tenants see only their own secrets and fills, across a restart", async () 
 
   for (const s of [betaAfter, bob, aliceAfter]) await s.client.close();
 }, 90_000);
+
+test("one tenant cannot take every session slot", async () => {
+  // 8 slots and 2 tenants: beta gets at most 4, and alpha still gets in.
+  const betaToken = await token(asB, "beta", { sub: "greedy" });
+  let opened = 0;
+  let res: Response;
+  while ((res = await rpc("beta", betaToken, initialize)).status === 200) {
+    opened++;
+    expect(opened).toBeLessThanOrEqual(4);
+  }
+  expect(res.status).toBe(503);
+  expect(await res.text()).toContain("tenant is at its session limit");
+  expect(
+    (await rpc("alpha", await token(asA, "alpha"), initialize)).status,
+  ).toBe(200);
+});
 
 test("the plaintext never appeared in any HTTP response", () => {
   expect(transcript.length).toBeGreaterThan(0);

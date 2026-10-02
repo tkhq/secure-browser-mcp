@@ -29,6 +29,9 @@
  *   SBM_STATE_KEY       32-byte key (hex or base64), required with
  *                       SBM_STATE_DIR. Each tenant's key is derived from it.
  *   SBM_MAX_SESSIONS    concurrent agent sessions (default 8)
+ *   SBM_MAX_SESSIONS_PER_TENANT
+ *                       concurrent sessions per tenant (default: an equal
+ *                       share of SBM_MAX_SESSIONS)
  *   SBM_SESSION_IDLE_S  close sessions idle this long (default 1800)
  *   SBM_DEV_SHARED_TOKEN=1 with SBM_HTTP_TOKEN
  *                       development only: also serve /mcp behind one shared
@@ -42,6 +45,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -143,6 +147,18 @@ function storeFactory(): (endpointId: string) => MemoryPendingFillStore {
   const key = process.env["SBM_STATE_KEY"];
   if (!key) throw new Error("SBM_STATE_DIR requires SBM_STATE_KEY");
   const master = parseStateKey(key);
+  // Step-1 brokers parked fills directly in SBM_STATE_DIR, exported with the
+  // one shared Turnkey key. They belong to no tenant, so they are not loaded
+  // (docs/HOSTED.md, "Upgrading from the shared token").
+  const legacy = existsSync(dir)
+    ? readdirSync(dir).filter((f) => f.endsWith(".fill")).length
+    : 0;
+  if (legacy > 0) {
+    console.error(
+      `secure-browser-mcp: WARNING: ignoring ${legacy} parked fill(s) from ` +
+        `a shared-token broker in ${dir}; their approvals must be restarted`,
+    );
+  }
   return (id) =>
     new FilePendingFillStore(
       join(dir, "tenants", id),
@@ -150,9 +166,12 @@ function storeFactory(): (endpointId: string) => MemoryPendingFillStore {
     );
 }
 
+/** RFC 6750 §2.1 b64token: the only characters a bearer token may hold. */
+const B64TOKEN = /^[A-Za-z0-9._~+/-]+=*$/;
+
 function bearerToken(req: IncomingMessage): string | undefined {
-  const header = req.headers.authorization ?? "";
-  return /^Bearer ([A-Za-z0-9._~+/-]+=*)$/i.exec(header)?.[1];
+  const match = /^Bearer (\S+)$/i.exec(req.headers.authorization ?? "");
+  return match && B64TOKEN.test(match[1]!) ? match[1] : undefined;
 }
 
 /** Constant-time compare; compares digests so lengths do not leak. */
@@ -337,6 +356,14 @@ async function main(): Promise<void> {
           "to serve /mcp with it, or unset it and configure SBM_TENANTS",
       );
     }
+    // A token the parser would never accept would 401 every request with
+    // nothing in the logs; refuse it up front instead.
+    if (!B64TOKEN.test(sharedToken)) {
+      throw new Error(
+        "SBM_HTTP_TOKEN may contain only letters, digits, and - . _ ~ + / " +
+          "(with trailing =); openssl rand -hex 32 makes one",
+      );
+    }
     dev = devEndpoint(sharedToken, makeStore);
     console.error(
       "secure-browser-mcp: WARNING: SBM_DEV_SHARED_TOKEN is on. /mcp accepts " +
@@ -347,6 +374,13 @@ async function main(): Promise<void> {
   if (tenants.size === 0 && !dev) {
     throw new Error("Configure tenants with SBM_TENANTS and SBM_PUBLIC_URL");
   }
+  // By default each endpoint gets a fair share of the session slots, so one
+  // tenant cannot hold them all and lock the others out.
+  const endpoints = tenants.size + (dev ? 1 : 0);
+  const maxPerTenant = envInt(
+    "SBM_MAX_SESSIONS_PER_TENANT",
+    Math.max(1, Math.floor(maxSessions / endpoints)),
+  );
 
   const sessions = new Map<string, Session>();
   const isLive = (owner: string) => sessions.has(owner);
@@ -434,8 +468,23 @@ async function main(): Promise<void> {
     if (req.method !== "POST" || !isInitializeRequest(body)) {
       return rpcError(res, 400, "Missing mcp-session-id");
     }
+    // A session holds a browser, so opening one needs a token that can use
+    // at least one tool.
+    if (!SCOPES.some((s) => caller.scopes.has(s))) {
+      return refuse(res, 403, endpoint, {
+        error: "insufficient_scope",
+        description: "Opening a session requires an sbm scope",
+        scopes: SCOPES,
+      });
+    }
     if (sessions.size >= maxSessions) {
       return rpcError(res, 503, "Broker is at its session limit");
+    }
+    const tenantSessions = [...sessions.values()].filter(
+      (s) => s.endpoint === endpoint.id,
+    ).length;
+    if (tenantSessions >= maxPerTenant) {
+      return rpcError(res, 503, "This tenant is at its session limit");
     }
     const transport = await openSession(endpoint, caller);
     await transport.handleRequest(req, res, body);

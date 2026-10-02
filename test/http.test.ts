@@ -147,6 +147,25 @@ test("the shared token needs the dev flag", async () => {
   );
 });
 
+test("a shared token the header parser cannot carry stops startup", async () => {
+  const proc = Bun.spawn(["bun", "src/http.ts"], {
+    cwd: new URL("..", import.meta.url).pathname,
+    stdout: "ignore",
+    stderr: "pipe",
+    env: {
+      ...process.env,
+      SBM_HTTP_TOKEN: "p@ss:word!",
+      SBM_DEV_SHARED_TOKEN: "1",
+    },
+  });
+  const guard = setTimeout(() => proc.kill(), 10_000);
+  expect(await proc.exited).not.toBe(0);
+  clearTimeout(guard);
+  expect(await new Response(proc.stderr).text()).toContain(
+    "SBM_HTTP_TOKEN may contain only",
+  );
+});
+
 test("requests without the bearer token are refused", async () => {
   const res = await fetch(url, { method: "POST", body: "{}" });
   expect(res.status).toBe(401);

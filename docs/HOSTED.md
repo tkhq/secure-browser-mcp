@@ -30,23 +30,24 @@ SBM_DEV_SHARED_TOKEN=1 SBM_HTTP_TOKEN="$(openssl rand -hex 32)" bun run serve
 
 ## Configuration
 
-| Variable                    | Default           | Purpose                                                                                                                           |
-| --------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `SBM_TENANTS`               | (none)            | Path to the tenant file. The image sets `/etc/sbm/tenants.json`; mount the file there.                                            |
-| `SBM_PUBLIC_URL`            | (required)        | The origin clients reach the broker at, such as `https://sbm.example.com`. Token audiences are built from it.                     |
-| `SBM_DEV_SHARED_TOKEN`      | (off)             | `1` serves `/mcp` with `SBM_HTTP_TOKEN`. Development only.                                                                        |
-| `SBM_HTTP_TOKEN`            | (none)            | The shared token for `SBM_DEV_SHARED_TOKEN`.                                                                                      |
-| `SBM_HTTP_HOST`             | `127.0.0.1`       | Listen address. The container image sets `0.0.0.0`.                                                                               |
-| `SBM_HTTP_PORT`             | `8080`            | Listen port.                                                                                                                      |
-| `SBM_STATE_DIR`             | (none)            | Directory for parked fills. Without it, a restart strands every pending approval.                                                 |
-| `SBM_STATE_KEY`             | (none)            | 32-byte key, 64 hex characters or base64. Required with `SBM_STATE_DIR`. Each tenant's key is derived from it.                    |
-| `SBM_BROWSER`               | `local`           | Where session browsers run: `local` (Chrome on this host) or `browserbase`. The image sets `browserbase`.                         |
-| `BROWSERBASE_API_KEY`       | (none)            | Required with `SBM_BROWSER=browserbase`.                                                                                          |
-| `BROWSERBASE_PROJECT_ID`    | (first project)   | Browserbase project for sessions.                                                                                                 |
-| `SBM_BROWSERBASE_TIMEOUT_S` | (project default) | Maximum Browserbase session length, in seconds.                                                                                   |
-| `SBM_MAX_SESSIONS`          | `8`               | Concurrent agent sessions. Each session gets its own browser. On Browserbase, keep this at or below the plan's concurrency limit. |
-| `SBM_SESSION_IDLE_S`        | `1800`            | The broker closes a session, and its browser, after this many idle seconds.                                                       |
-| `SBM_CHROME_ARGS`           | (none)            | Local Chrome only. Extra Chrome flags, separated by spaces.                                                                       |
+| Variable                      | Default           | Purpose                                                                                                                                                                        |
+| ----------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SBM_TENANTS`                 | (none)            | Path to the tenant file. The image sets `/etc/sbm/tenants.json`; mount the file there.                                                                                         |
+| `SBM_PUBLIC_URL`              | (required)        | The origin clients reach the broker at, such as `https://sbm.example.com`. Token audiences are built from it.                                                                  |
+| `SBM_DEV_SHARED_TOKEN`        | (off)             | `1` serves `/mcp` with `SBM_HTTP_TOKEN`. Development only.                                                                                                                     |
+| `SBM_HTTP_TOKEN`              | (none)            | The shared token for `SBM_DEV_SHARED_TOKEN`.                                                                                                                                   |
+| `SBM_HTTP_HOST`               | `127.0.0.1`       | Listen address. The container image sets `0.0.0.0`.                                                                                                                            |
+| `SBM_HTTP_PORT`               | `8080`            | Listen port.                                                                                                                                                                   |
+| `SBM_STATE_DIR`               | (none)            | Directory for parked fills. Without it, a restart strands every pending approval.                                                                                              |
+| `SBM_STATE_KEY`               | (none)            | 32-byte key, 64 hex characters or base64. Required with `SBM_STATE_DIR`. Each tenant's key is derived from it.                                                                 |
+| `SBM_BROWSER`                 | `local`           | Where session browsers run: `local` (Chrome on this host) or `browserbase`. The image sets `browserbase`.                                                                      |
+| `BROWSERBASE_API_KEY`         | (none)            | Required with `SBM_BROWSER=browserbase`.                                                                                                                                       |
+| `BROWSERBASE_PROJECT_ID`      | (first project)   | Browserbase project for sessions.                                                                                                                                              |
+| `SBM_BROWSERBASE_TIMEOUT_S`   | (project default) | Maximum Browserbase session length, in seconds.                                                                                                                                |
+| `SBM_MAX_SESSIONS`            | `8`               | Concurrent agent sessions. Each session gets its own browser. On Browserbase, keep this at or below the plan's concurrency limit.                                              |
+| `SBM_MAX_SESSIONS_PER_TENANT` | (equal share)     | Concurrent sessions per tenant. Defaults to `SBM_MAX_SESSIONS` divided by the number of tenants (the dev `/mcp` endpoint counts as one), so one tenant cannot hold every slot. |
+| `SBM_SESSION_IDLE_S`          | `1800`            | The broker closes a session, and its browser, after this many idle seconds.                                                                                                    |
+| `SBM_CHROME_ARGS`             | (none)            | Local Chrome only. Extra Chrome flags, separated by spaces.                                                                                                                    |
 
 `TURNKEY_API_BASE_URL` and the browser `SBM_*` variables work as in the stdio broker. The `TURNKEY_API_*` key and `TURNKEY_ORGANIZATION_ID` are used only by the development `/mcp` endpoint; tenants name their own.
 
@@ -131,13 +132,14 @@ The broker caches each JWKS for 10 minutes and fetches it again when a token nam
 | `sbm:fill`   | `fill_secret`, `await_fill`                                           |
 | `sbm:refs`   | `list_secret_refs`                                                    |
 
-Opening a session and listing tools needs only a valid token. An agent that fills secrets needs all three scopes. The broker checks scopes on every request against the token sent with it, so a client that steps up its token gets the new scopes in the same session.
+Opening a session needs a valid token with at least one of these scopes; a token with none gets `403 insufficient_scope`. Listing tools needs nothing more. An agent that fills secrets needs all three scopes. The broker checks scopes on every request against the token sent with it, so a client that steps up its token gets the new scopes in the same session.
 
 **Errors.**
 
 - No token, or an invalid one: `401` with `WWW-Authenticate: Bearer error="invalid_token", scope="sbm:browse sbm:fill sbm:refs", resource_metadata="<metadata URL>"` (no `error` when the request had no token). MCP clients follow `resource_metadata` to find the authorization server.
 - A tool call without the tool's scope: `403` with `WWW-Authenticate: Bearer error="insufficient_scope", scope="<the scope the tool needs>", resource_metadata="..."`.
 - An unknown tenant: `404`.
+- The broker, or the tenant, at its session limit: `503`.
 
 ## Connect Hermes
 
@@ -165,13 +167,19 @@ The hosted browser runs on the broker host. `localhost` in a URL refers to that 
 
 ## Restarts and pending fills
 
-A parked fill holds the export's decryption key. With `SBM_STATE_DIR` set, the broker writes each parked fill to one AES-256-GCM file under `SBM_STATE_DIR/tenants/<tenant>/`, and loads the files at startup. Each tenant's files are encrypted with a key derived from `SBM_STATE_KEY` and the tenant id (HKDF-SHA256), so one tenant's file does not decrypt as another's. Parked fills from a step-1 broker (files directly in `SBM_STATE_DIR`) are not loaded.
+A parked fill holds the export's decryption key. With `SBM_STATE_DIR` set, the broker writes each parked fill to one AES-256-GCM file under `SBM_STATE_DIR/tenants/<tenant>/`, and loads the files at startup. Each tenant's files are encrypted with a key derived from `SBM_STATE_KEY` and the tenant id (HKDF-SHA256), so one tenant's file does not decrypt as another's. Parked fills from a step-1 broker (files directly in `SBM_STATE_DIR`) are not loaded; see below.
 
 After a restart, the old MCP session and its browser are gone. The client starts a new session (the broker answers the old session id with 404, as the MCP spec requires). A new session of the same tenant and subject can claim a parked fill by presenting its `fill_id`: the broker gave that random id only to the original session. The old element uids are gone too, so the agent navigates back to the page, takes a snapshot, and calls `await_fill` with the `fill_id` and the new `element_uid` or `fields`. The destination binding is checked again as for any fill.
 
 If the page is not ready when the approval arrives, the broker drops the plaintext and keeps the fill. The agent can call `await_fill` again with new targets; the approved export is redeemed again.
 
 Run one broker process per state directory. Two processes that share a directory do not see each other's writes.
+
+### Upgrading from the shared token
+
+A step-1 broker parked fills directly in `SBM_STATE_DIR`, exported with its one shared Turnkey key and owned by no tenant or subject. This broker does not load them: redeeming one through a tenant would use a key and organization that tenant may not own, and nothing records which tenant's caller parked it. At startup it logs how many it ignored.
+
+Before the upgrade, drain the pending fills: stop new traffic to the old broker, then wait until the agents have redeemed their parked fills or the 24-hour expiry passes. A fill still waiting for approval at the upgrade is lost, and its approval must be requested again. After the upgrade, delete the `*.fill` files left directly in `SBM_STATE_DIR`.
 
 ## Container
 
