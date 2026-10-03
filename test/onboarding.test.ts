@@ -145,7 +145,10 @@ for (const backend of ["mock", "turnkey"] as const) {
         ),
         registry: new RedactionRegistry(),
         binding: new BindingPolicy(),
-        pendingFills: scopedFills(new MemoryPendingFillStore(), "test"),
+        pendingFills: scopedFills(new MemoryPendingFillStore(), {
+          owner: "test",
+          principal: "test",
+        }),
       },
       {},
     );
