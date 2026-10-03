@@ -122,6 +122,10 @@ The metadata document lists `resource`, `authorization_servers`, `scopes_support
 - `exp` is present and not past, and `nbf`, if present, is not in the future, each with 30 seconds of clock skew,
 - `sub` is present.
 
+The broker reads scopes from `scope` (a space-separated string, as RFC 9068 says) and from `scp` (a string or an array of strings, as Okta issues). If a token has both, the broker uses all of them.
+
+**Client credentials.** A machine client can use the client credentials grant. The broker does not check how a token was issued. The token must meet the same rules: the tenant's resource URI as `aud`, a `sub` (usually the client ID), and the scopes the client needs. Every session that the client opens has the same principal, so any of them can claim a fill that another one parked. The broker does not accept opaque tokens, and it does not read Entra ID app roles (`roles`).
+
 The broker caches each JWKS for 10 minutes and fetches it again when a token names a key id it does not have (at most once every 30 seconds). If the JWKS cannot be fetched, the token is refused. The broker does not introspect opaque tokens and does not accept refresh tokens; the client refreshes with its authorization server. Tokens go nowhere but the validator: not to Turnkey, not to Browserbase, and not to the logs.
 
 **Scopes.** Each tool needs one scope:

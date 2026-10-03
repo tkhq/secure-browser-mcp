@@ -465,6 +465,40 @@ test("tenants see only their own secrets and fills, across a restart", async () 
   for (const s of [betaAfter, bob, aliceAfter]) await s.client.close();
 }, 90_000);
 
+test("a client-credentials token with scp scopes can use the tools", async () => {
+  // No scope claim: only scp, as Okta issues it.
+  const machine = await asA.mint({
+    aud: mcpUrl("alpha"),
+    sub: "svc-agent@clients",
+    scp: ["sbm:browse", "sbm:refs"],
+  });
+  const sessionId = await rawSession("alpha", machine);
+
+  const refs = await rpc(
+    "alpha",
+    machine,
+    { method: "tools/call", params: { name: "list_secret_refs" } },
+    sessionId,
+  );
+  expect(refs.status).toBe(200);
+
+  // The scp claim limits the client like scope does.
+  const fill = await rpc(
+    "alpha",
+    machine,
+    {
+      method: "tools/call",
+      params: {
+        name: "fill_secret",
+        arguments: { secret_id: "x", element_uid: "y" },
+      },
+    },
+    sessionId,
+  );
+  expect(fill.status).toBe(403);
+  expect(fill.headers.get("www-authenticate")).toContain('scope="sbm:fill"');
+}, 30_000);
+
 test("one tenant cannot take every session slot", async () => {
   // 8 slots and 2 tenants: beta gets at most 4, and alpha still gets in.
   const betaToken = await token(asB, "beta", { sub: "greedy" });

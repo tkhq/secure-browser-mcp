@@ -12,8 +12,25 @@ export const SCOPES = ["sbm:browse", "sbm:fill", "sbm:refs"] as const;
 
 export type Scope = (typeof SCOPES)[number];
 
-/** Space-separated scopes from a token's `scope` claim (RFC 9068 §2.2.3). */
-export function parseScopes(claim: unknown): Set<string> {
-  if (typeof claim !== "string") return new Set();
-  return new Set(claim.split(" ").filter(Boolean));
+/**
+ * Scopes from a token's claims. RFC 9068 §2.2.3 puts them in `scope`, a
+ * space-separated string. Okta and some other servers use `scp` instead,
+ * as a string or an array of strings. The broker reads both and takes the
+ * union; a claim of any other shape adds nothing.
+ */
+export function parseScopes(claims: {
+  scope?: unknown;
+  scp?: unknown;
+}): Set<string> {
+  const scopes = new Set<string>();
+  for (const claim of [claims.scope, claims.scp]) {
+    const parts =
+      typeof claim === "string"
+        ? claim.split(" ")
+        : Array.isArray(claim)
+          ? claim.filter((s): s is string => typeof s === "string")
+          : [];
+    for (const s of parts) if (s) scopes.add(s);
+  }
+  return scopes;
 }

@@ -20,6 +20,8 @@ export type MintOptions = {
   sub?: string;
   aud?: string | string[];
   scope?: string;
+  /** Okta-style scopes claim. */
+  scp?: string | string[];
   /** Seconds from now; negative for an expired token. */
   expiresIn?: number;
   /** Seconds from now. */
@@ -90,6 +92,7 @@ export class MockAuthServer {
     const now = Math.floor(Date.now() / 1000);
     const claims: Record<string, unknown> = {};
     if (opts.scope !== undefined) claims["scope"] = opts.scope;
+    if (opts.scp !== undefined) claims["scp"] = opts.scp;
     const jwt = new SignJWT(claims)
       .setProtectedHeader({ alg: "ES256", kid: key.kid, typ: "at+jwt" })
       .setIssuer(opts.iss ?? this.issuer)

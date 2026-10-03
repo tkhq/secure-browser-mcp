@@ -118,6 +118,6 @@ export async function verifyAccessToken(
   return {
     issuer: trusted.issuer,
     subject: payload.sub,
-    scopes: parseScopes(payload["scope"]),
+    scopes: parseScopes(payload),
   };
 }

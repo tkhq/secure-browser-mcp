@@ -45,6 +45,43 @@ test("accepts a valid token and reports its principal and scopes", async () => {
   expect([...p.scopes].sort()).toEqual(["sbm:browse", "sbm:fill"]);
 });
 
+test("reads Okta-style scp scopes, as an array or a string", async () => {
+  const jwks = new JwksCache();
+  const scopesOf = async (claims: {
+    scope?: string;
+    scp?: string | string[];
+  }) =>
+    [
+      ...(
+        await verifyAccessToken(
+          await as.mint({ aud: AUDIENCE, ...claims }),
+          expectFor(),
+          jwks,
+        )
+      ).scopes,
+    ].sort();
+  expect(await scopesOf({ scp: ["sbm:refs", "sbm:browse"] })).toEqual([
+    "sbm:browse",
+    "sbm:refs",
+  ]);
+  expect(await scopesOf({ scp: "sbm:fill" })).toEqual(["sbm:fill"]);
+  expect(await scopesOf({ scope: "sbm:browse", scp: ["sbm:fill"] })).toEqual([
+    "sbm:browse",
+    "sbm:fill",
+  ]);
+});
+
+test("accepts a client-credentials token: a client id as sub, no user claims", async () => {
+  const token = await as.mint({
+    aud: AUDIENCE,
+    sub: "svc-agent@clients",
+    scope: "sbm:browse sbm:fill sbm:refs",
+  });
+  const p = await verifyAccessToken(token, expectFor(), new JwksCache());
+  expect(p.subject).toBe("svc-agent@clients");
+  expect(p.scopes.size).toBe(3);
+});
+
 test("rejects expired, not-yet-valid, and exp-less tokens", async () => {
   await rejects(await as.mint({ aud: AUDIENCE, expiresIn: -120 }));
   await rejects(await as.mint({ aud: AUDIENCE, notBefore: 120 }));
