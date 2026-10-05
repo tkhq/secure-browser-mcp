@@ -15,6 +15,7 @@ import {
 import { TurnkeySecretsClient } from "./broker/turnkey-secrets.js";
 import {
   BrowserbaseHost,
+  LightpandaHost,
   LocalChromeHost,
   type BrowserHost,
 } from "./browser/hosts.js";
@@ -73,13 +74,14 @@ export type Broker = {
   binding: BindingPolicy;
   /** Builds one browser host per agent session. */
   browserHost: () => BrowserHost;
-  browser: "local" | "browserbase";
+  browser: BrowserHost["kind"];
 };
 
 /**
  * SBM_BROWSER picks where session browsers run: "local" (default; Chrome on
  * this machine) or "browserbase" (BROWSERBASE_API_KEY, optional
- * BROWSERBASE_PROJECT_ID and SBM_BROWSERBASE_TIMEOUT_S).
+ * BROWSERBASE_PROJECT_ID and SBM_BROWSERBASE_TIMEOUT_S), or "lightpanda"
+ * (experimental; SBM_LIGHTPANDA_PATH, optional SBM_LIGHTPANDA_ARGS).
  */
 function browserHostFromEnv(): Pick<Broker, "browserHost" | "browser"> {
   const kind = process.env["SBM_BROWSER"] ?? "local";
@@ -99,9 +101,21 @@ function browserHostFromEnv(): Pick<Broker, "browserHost" | "browser"> {
         }),
     };
   }
+  if (kind === "lightpanda") {
+    const executablePath = process.env["SBM_LIGHTPANDA_PATH"];
+    if (!executablePath)
+      throw new Error("SBM_BROWSER=lightpanda needs SBM_LIGHTPANDA_PATH");
+    const extraArgs = (process.env["SBM_LIGHTPANDA_ARGS"] ?? "")
+      .split(/\s+/)
+      .filter(Boolean);
+    return {
+      browser: "lightpanda",
+      browserHost: () => new LightpandaHost({ executablePath, extraArgs }),
+    };
+  }
   if (kind !== "local") {
     throw new Error(
-      `SBM_BROWSER must be "local" or "browserbase", not "${kind}"`,
+      `SBM_BROWSER must be "local", "browserbase", or "lightpanda", not "${kind}"`,
     );
   }
   const executablePath = findChrome();
