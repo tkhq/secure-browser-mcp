@@ -47,6 +47,13 @@ The hosted broker (`src/http.ts`, [HOSTED.md](HOSTED.md)) is a Turnkey-operated 
 
 **Chrome's sandbox stays on.** With local Chrome, the broker holds plaintext during a fill, so a renderer that escapes into the broker's process can read it. Do not run the browser with `--no-sandbox`.
 
+<a id="lightpanda"></a>**Lightpanda (experimental).** With `SBM_BROWSER=lightpanda`, each session runs in its own Lightpanda process on the broker host. Two of the local Chrome guarantees do not hold:
+
+- Lightpanda has no sandbox and no site isolation. Page JavaScript runs in V8 inside the Lightpanda process. If a page exploits V8, it controls that process, and the process holds the session's filled values. One process serves one session, so a compromise does not reach other sessions' browsers. It can still reach anything the process's user can reach on the host: run Lightpanda as a different user from the broker, or in its own container, before a deployment uses it.
+- CDP is a TCP port with no authentication, not a pipe. The port is on loopback and random, and Lightpanda accepts one CDP client. If another local process connects first, the broker's connection fails and the session reports an error. After the broker connects, other clients are refused. A deployment must still not run untrusted processes on the broker host.
+
+The rest of this model applies as with local Chrome: the browser reaches the network from the broker host, so restrict its egress (`--block-private-networks` helps), and nothing else operates the browser.
+
 **Planned.** Design 2 (EMG-89) moves decryption into the browser extension from demo-runner-tk, which already runs on Browserbase. Then the hosted service never holds plaintext, and Browserbase is the only operator that can see it. Design 3 runs the broker and browser in an attested enclave.
 
 ## Assumptions that must hold
