@@ -27,7 +27,7 @@ Keep `SBM_STATE_KEY` stable across restarts. A different key cannot read the par
 | `SBM_STATE_DIR`             | (none)            | Directory for parked fills. Without it, a restart strands every pending approval.                                                                                   |
 | `SBM_STATE_KEY`             | (none)            | 32-byte key, 64 hex characters or base64. Required with `SBM_STATE_DIR`.                                                                                            |
 | `TURNKEY_SIGNER_PUBLIC_KEY` | (SDK default)     | Enclave quorum key that signs secret bundles. Required when `TURNKEY_API_BASE_URL` points at a Turnkey environment with its own enclaves; production needs nothing. |
-| `SBM_BROWSER`               | `local`           | Where session browsers run: `local` (Chrome on this host) or `browserbase`. The image sets `browserbase`.                                                           |
+| `SBM_BROWSER`               | `local`           | Where session browsers run: `local` (Chrome on this host), `browserbase`, or `lightpanda` (experimental). The image sets `browserbase`.                             |
 | `BROWSERBASE_API_KEY`       | (none)            | Required with `SBM_BROWSER=browserbase`.                                                                                                                            |
 | `BROWSERBASE_PROJECT_ID`    | (first project)   | Browserbase project for sessions.                                                                                                                                   |
 | `SBM_BROWSERBASE_TIMEOUT_S` | (project default) | Maximum Browserbase session length, in seconds.                                                                                                                     |
@@ -35,6 +35,8 @@ Keep `SBM_STATE_KEY` stable across restarts. A different key cannot read the par
 | `SBM_SESSION_IDLE_S`        | `1800`            | The broker closes a session, and its browser, after this many idle seconds.                                                                                         |
 | `SBM_CHROME_ARGS`           | (none)            | Local Chrome only. Extra Chrome flags, separated by spaces.                                                                                                         |
 | `SBM_ALLOWED_ORIGINS`       | (none)            | Browser origins that may call `/mcp`, separated by commas. Any other `Origin` header gets `403`. See [Origin check](#origin-check).                                 |
+| `SBM_LIGHTPANDA_PATH`       | (none)            | Required with `SBM_BROWSER=lightpanda`. Path to the Lightpanda executable.                                                                                          |
+| `SBM_LIGHTPANDA_ARGS`       | (none)            | Lightpanda only. Extra `lightpanda serve` flags, separated by spaces.                                                                                               |
 
 The `TURNKEY_*` variables and the other `SBM_*` variables work as in the stdio broker. Step 1 uses one Turnkey API key for every session.
 
@@ -138,6 +140,28 @@ Build with `--build-arg LOCAL_CHROME=true` and run with `-e SBM_BROWSER=local` t
 - Hosts that set `user.max_user_namespaces = 0` (Talos does by default) cannot run the sandbox at all.
 
 Do not add `--no-sandbox` to `SBM_CHROME_ARGS`: without the sandbox, a compromised renderer can read the broker's memory, which holds plaintext during a fill.
+
+### Lightpanda (experimental)
+
+[Lightpanda](https://lightpanda.io) is a headless browser that speaks CDP. It does no rendering or layout, and it needs no sandbox setup, so it could run where the Chrome sandbox cannot. Set `SBM_BROWSER=lightpanda` and `SBM_LIGHTPANDA_PATH`.
+
+The broker starts one `lightpanda serve` process for each session, on a random loopback port, and stops it when the session closes. It passes these flags:
+
+- `--cdp-max-connections 1`: after the broker connects, Lightpanda refuses every other CDP client.
+- `--load-resources iframe`: without it, iframes (card fields, for example) never load.
+- `--disable-metrics`: no Prometheus endpoint on the CDP port.
+
+It also sets `LIGHTPANDA_DISABLE_TELEMETRY=true`, because Lightpanda sends usage telemetry by default.
+
+Add `--block-private-networks` to `SBM_LIGHTPANDA_ARGS` in a deployment, so that the agent cannot use the browser to reach internal services. Do not add it for local tests against `localhost` pages.
+
+Known differences from Chrome:
+
+- Element sizes are not real. Every element in the layout reports a small fixed size, and an element with `display: none` reports zero. The snapshot's visibility check still drops `display: none` fields.
+- One page per browser. The broker uses one page per session, so this does not limit it.
+- Site support is narrower than Chrome. Test each target site before you rely on it.
+
+Read [THREAT-MODEL.md](THREAT-MODEL.md#lightpanda) before you run it in a deployment.
 
 ## Deployment requirements
 
