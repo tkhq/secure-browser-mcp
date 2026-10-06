@@ -12,9 +12,10 @@ import { FIXTURE_ORIGIN, startFixtureServer } from "./fixtures/serve.js";
 import { McpStdioClient } from "./mcp-client.js";
 
 /**
- * The hosted broker (src/http.ts), black box: EMG-89 step 1 acceptance.
- * Same tools as stdio, sessions isolated from each other, and a pending
- * fill that survives a broker restart.
+ * The hosted broker (src/http.ts), black box, in its development
+ * shared-token mode (SBM_DEV_SHARED_TOKEN): EMG-89 step 1 acceptance. Same
+ * tools as stdio, sessions isolated from each other, and a pending fill
+ * that survives a broker restart. Tenant OAuth is in oauth.test.ts.
  */
 
 const TOKEN = "test-token";
@@ -22,6 +23,8 @@ const DEMO_PLAINTEXT = "mock-demo-p@ssw0rd-1234"; // mock-secrets.ts seed
 const CARD_NUMBER = "4242424242424242"; // mock-secrets.ts demo-card seed
 const stateDir = mkdtempSync(join(tmpdir(), "sbm-state-"));
 const stateKey = randomBytes(32).toString("hex");
+/** Where the dev endpoint's parked fills live under SBM_STATE_DIR. */
+const fillDir = join(stateDir, "tenants", "_shared-token");
 const port = 18_000 + Math.floor(Math.random() * 2_000);
 const url = `http://127.0.0.1:${port}/mcp`;
 
@@ -44,6 +47,7 @@ async function startBroker(): Promise<BrokerProcess> {
       TURNKEY_ORGANIZATION_ID: "",
       SBM_HEADLESS: "true",
       SBM_HTTP_TOKEN: TOKEN,
+      SBM_DEV_SHARED_TOKEN: "1",
       SBM_HTTP_PORT: String(port),
       SBM_STATE_DIR: stateDir,
       SBM_STATE_KEY: stateKey,
@@ -128,6 +132,40 @@ afterAll(async () => {
   rmSync(stateDir, { recursive: true, force: true });
 });
 
+test("the shared token needs the dev flag", async () => {
+  const proc = Bun.spawn(["bun", "src/http.ts"], {
+    cwd: new URL("..", import.meta.url).pathname,
+    stdout: "ignore",
+    stderr: "pipe",
+    env: { ...process.env, SBM_HTTP_TOKEN: TOKEN, SBM_DEV_SHARED_TOKEN: "" },
+  });
+  const guard = setTimeout(() => proc.kill(), 10_000);
+  expect(await proc.exited).not.toBe(0);
+  clearTimeout(guard);
+  expect(await new Response(proc.stderr).text()).toContain(
+    "SBM_DEV_SHARED_TOKEN",
+  );
+});
+
+test("a shared token the header parser cannot carry stops startup", async () => {
+  const proc = Bun.spawn(["bun", "src/http.ts"], {
+    cwd: new URL("..", import.meta.url).pathname,
+    stdout: "ignore",
+    stderr: "pipe",
+    env: {
+      ...process.env,
+      SBM_HTTP_TOKEN: "p@ss:word!",
+      SBM_DEV_SHARED_TOKEN: "1",
+    },
+  });
+  const guard = setTimeout(() => proc.kill(), 10_000);
+  expect(await proc.exited).not.toBe(0);
+  clearTimeout(guard);
+  expect(await new Response(proc.stderr).text()).toContain(
+    "SBM_HTTP_TOKEN may contain only",
+  );
+});
+
 test("requests without the bearer token are refused", async () => {
   const res = await fetch(url, { method: "POST", body: "{}" });
   expect(res.status).toBe(401);
@@ -204,9 +242,9 @@ test("a pending fill survives a broker restart", async () => {
   expect(parked.status).toBe("pending_approval");
 
   // The fill is on disk, encrypted.
-  const files = readdirSync(stateDir).filter((f) => f.endsWith(".fill"));
+  const files = readdirSync(fillDir).filter((f) => f.endsWith(".fill"));
   expect(files.length).toBe(1);
-  const onDisk = readFileSync(join(stateDir, files[0]!), "utf8");
+  const onDisk = readFileSync(join(fillDir, files[0]!), "utf8");
   expect(onDisk).not.toContain(parked.fill_id);
   expect(onDisk).not.toContain("demo-login-password");
 
@@ -228,7 +266,7 @@ test("a pending fill survives a broker restart", async () => {
     timeout_seconds: 10,
   });
   expect(done.body).toMatchObject({ filled: true, secret_id: secretId });
-  expect(readdirSync(stateDir).filter((f) => f.endsWith(".fill"))).toEqual([]);
+  expect(readdirSync(fillDir).filter((f) => f.endsWith(".fill"))).toEqual([]);
 
   const snap = (await after.call("snapshot")).body;
   const filled = snap.elements.find((e: { uid: string }) => e.uid === freshUid);

@@ -17,7 +17,7 @@ import type { AnyToolDef, ToolContext } from "./tools/tool.js";
 // JS could hook input events and exfiltrate a secret before or after a fill,
 // so script evaluation is excluded from the tool surface by design — see
 // docs/DESIGN.md and docs/THREAT-MODEL.md before adding anything here.
-const TOOLS: AnyToolDef[] = [
+export const TOOLS: AnyToolDef[] = [
   listSecretRefs,
   navigate,
   snapshot,

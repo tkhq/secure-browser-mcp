@@ -4,6 +4,7 @@ import { defineTool } from "./tool.js";
 
 export const navigate = defineTool({
   name: "navigate",
+  scope: "sbm:browse",
   description: "Navigate the broker-owned browser to a URL.",
   inputSchema: {
     url: z.string().url(),
