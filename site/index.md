@@ -8,6 +8,8 @@ html: https://tkhq.github.io/secure-browser-mcp/
 
 > Credentials without context leakage.
 
+**Status: alpha.** Secure Browser MCP is in early development and has no releases. Do not use it in production or with real credentials yet.
+
 Secure Browser MCP lets an agent log in, check out, and fill forms while credentials remain in Turnkey Secrets. The agent receives a reference; the broker injects the secret directly into the browser.
 
 ## Why use it?
@@ -22,7 +24,7 @@ Turnkey consensus can park an export for human approval. The page is re-validate
 
 ### Designed to be boring
 
-There are no secret values in model context, MCP output, or logs, and no arbitrary script-evaluation tool.
+Every tool result is redacted before it reaches model context, MCP output, or logs. There is no arbitrary script-evaluation tool.
 
 ## Read next
 

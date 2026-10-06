@@ -8,10 +8,13 @@
   Let an agent log in, check out, and fill any form with credentials it never sees.
 </p>
 
+> [!WARNING]
+> **Status: alpha.** This project is in early development. It has no releases, and its API and security properties can change. Do not use it in production or with real credentials yet. The guarantees below are design goals that we test for.
+
 ## Features
 
 - **Fill by reference**: The agent holds an opaque secret reference and cannot read the value. It calls `fill_secret`, and the broker injects the plaintext straight into the page over raw CDP
-- **Zero context leakage**: The secret never enters the model context, the transcript, or logs. Every tool result passes through a single redaction choke point. It also catches copies that the page reformats, re-renders, or echoes into other elements. End-to-end tests assert no leak over the wire
+- **Secrets stay out of the context**: The agent never receives the secret value. Every tool result passes through a single redaction choke point before it reaches the model context, the transcript, or logs. Redaction also catches copies that the page reformats, re-renders, or echoes into other elements. End-to-end tests assert no leak over the wire. A destination page can always encode a value past redaction; see [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md)
 - **Destination bindings**: Each secret binds at import to an exact origin, URL pattern, and field selector. A page that talks the agent into filling anywhere else gets a broker-side refusal before any export
 - **Consensus approvals**: Turnkey policies decide who must sign an export. A gated fill parks as `pending_approval`; a human approves the activity, and `await_fill` completes the fill. Approvers still cannot read the value — only an ephemeral key held by the broker can decrypt it
 - **One approval per form**: A JSON-payload secret (card number, expiry, CVC) fills several fields in one call, under one export and one approval
