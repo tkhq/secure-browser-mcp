@@ -11,7 +11,10 @@
  * appearing in its context, exactly as a real card would work.
  */
 import { BINDING_KEYS } from "../src/broker/types.js";
-import { turnkeyClientFromEnv } from "../src/broker/turnkey-env.js";
+import {
+  signerOverrideFromEnv,
+  turnkeyClientFromEnv,
+} from "../src/broker/turnkey-env.js";
 
 // Two sets: payment links render on buy.stripe.com; sessions created via the
 // Checkout API render on checkout.stripe.com. Bindings are immutable static
@@ -67,6 +70,7 @@ for (const { name, plaintext, selector, origin } of CARD_SECRETS) {
       [BINDING_KEYS.origin]: origin,
       [BINDING_KEYS.selector]: selector,
     },
+    ...signerOverrideFromEnv(),
   });
   console.log(`import ${name} → ${secretId} (${origin})`);
 }
