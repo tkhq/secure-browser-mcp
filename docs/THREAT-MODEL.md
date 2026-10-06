@@ -8,7 +8,7 @@
 
 1. Destination bindings (`sbm:origin`, `sbm:url-pattern`, `sbm:selector`) fixed at import time. The broker refuses non-matching fills.
 2. No `evaluate_script` tool, so the agent cannot plant page JS that reads or intercepts a fill.
-3. Read-back scrubbing: snapshots, network logs, and screenshots cannot echo a filled value back into the context.
+3. Read-back scrubbing: snapshots, network logs, and screenshots cannot echo a filled value back into the context. This includes copies the page reformats (`4242 4242 4242 4242`), re-renders as a new node, or mirrors into other fields and text. Values of 8 characters or more also match with separators removed and case folded. Shorter values match exactly only.
 4. (Planned) Human confirmation via MCP Apps / elicitation before sensitive fills.
 5. (End state) The same binding enforced in Turnkey's policy engine, so the export itself fails for a wrong destination.
 
@@ -18,7 +18,7 @@
 
 **An adversarial agent with a shell on the broker's host.** In Claude Code the agent has Bash on the same machine. It could attach a debugger to the broker, reach the browser's CDP endpoint, or edit the broker's config. v1's guarantee is honest-agent: it keeps secrets out of the context, it does not survive the agent attacking the host. Mitigations in order of strength: run the broker in a container the agent cannot reach, then TVC (v2), where no agent-reachable machine ever holds plaintext.
 
-**The target site.** The filled page receives the secret by design. XSS on the destination origin, a compromised destination, or a phishing page on an _allowed_ origin path are out of scope. Prefer `sbm:url-pattern` over bare origins to shrink this surface: an allowed origin with attacker-controlled pages (user content, comments) is exactly the case a path pattern catches.
+**The target site.** The filled page receives the secret by design. It can also encode the value (reverse it, base64 it) so that read-back scrubbing cannot recognize it. XSS on the destination origin, a compromised destination, or a phishing page on an _allowed_ origin path are out of scope. Prefer `sbm:url-pattern` over bare origins to shrink this surface: an allowed origin with attacker-controlled pages (user content, comments) is exactly the case a path pattern catches.
 
 **JS memory.** JavaScript cannot reliably zeroize strings (see tkhq/sdk#1479 design notes). `release()` drops references; it does not wipe memory. The real story is process isolation (v1) and enclaves (v2).
 

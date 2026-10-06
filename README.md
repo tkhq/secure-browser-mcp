@@ -11,7 +11,7 @@
 ## Features
 
 - **Fill by reference**: The agent holds an opaque secret reference and cannot read the value. It calls `fill_secret`, and the broker injects the plaintext straight into the page over raw CDP
-- **Zero context leakage**: The secret never enters the model context, the transcript, or logs. Every tool result passes through a single redaction choke point, and end-to-end tests assert no leak over the wire
+- **Zero context leakage**: The secret never enters the model context, the transcript, or logs. Every tool result passes through a single redaction choke point. It also catches copies that the page reformats, re-renders, or echoes into other elements. End-to-end tests assert no leak over the wire
 - **Destination bindings**: Each secret binds at import to an exact origin, URL pattern, and field selector. A page that talks the agent into filling anywhere else gets a broker-side refusal before any export
 - **Consensus approvals**: Turnkey policies decide who must sign an export. A gated fill parks as `pending_approval`; a human approves the activity, and `await_fill` completes the fill. Approvers still cannot read the value — only an ephemeral key held by the broker can decrypt it
 - **One approval per form**: A JSON-payload secret (card number, expiry, CVC) fills several fields in one call, under one export and one approval

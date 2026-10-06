@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Northlake Supply — Checkout (formatted)</title>
+  </head>
+  <body>
+    <!--
+      Behaves like real payment forms: it groups the card number in fours,
+      re-renders the input as a new node on change, and echoes the number
+      into a read-only summary field and the pay button.
+    -->
+    <form id="checkout" action="/pay" method="post">
+      <label for="cardNumber">Card number</label>
+      <input type="text" id="cardNumber" name="cardNumber" />
+      <label for="cardExpiry">Expiry (MMYY)</label>
+      <input type="text" id="cardExpiry" name="cardExpiry" />
+      <label for="cardCvc">CVC</label>
+      <input type="password" id="cardCvc" name="cardCvc" />
+      <label for="summary">Paying with</label>
+      <input type="text" id="summary" name="summary" readonly />
+      <button type="submit" id="pay">Pay $9.99</button>
+    </form>
+    <script>
+      const group = (v) =>
+        v
+          .replace(/\D/g, "")
+          .replace(/(\d{4})(?=\d)/g, "$1 ")
+          .trim();
+      function wire(input) {
+        input.addEventListener("input", () => {
+          input.value = group(input.value);
+        });
+        input.addEventListener("change", () => {
+          const fresh = input.cloneNode();
+          fresh.value = input.value;
+          input.replaceWith(fresh);
+          wire(fresh);
+          document.getElementById("summary").value = fresh.value;
+          document.getElementById("pay").textContent =
+            "Pay $9.99 with " + fresh.value;
+        });
+      }
+      wire(document.getElementById("cardNumber"));
+    </script>
+  </body>
+</html>
