@@ -55,8 +55,9 @@ type RawInfo = {
  * document — which is what lets `RedactionRegistry.trackField` tags survive
  * re-snapshotting.
  *
- * Structural redaction happens HERE, not in scrub(): tagged fields and
- * password inputs never put their value into the result at all.
+ * Structural redaction happens HERE, not in scrub(): tagged fields, fields
+ * that hold a live secret (a re-rendered or mirrored copy), and password
+ * inputs never put their value into the result at all.
  */
 export async function captureSnapshot(
   session: BrowserSession,
@@ -89,6 +90,12 @@ export async function captureSnapshot(
     if (info.text) el.text = info.text;
     if (info.disabled) el.disabled = true;
     if (info.value !== undefined) {
+      const copied = registry.findSecret(info.value);
+      if (copied !== undefined) {
+        // A field the page re-rendered or mirrored the secret into: tag it
+        // so it stays redacted even after the page edits the copy.
+        registry.trackField(uid, copied);
+      }
       if (registry.isTaggedField(uid)) {
         el.value = "[REDACTED:secret-filled-field]";
       } else if (info.isPassword) {

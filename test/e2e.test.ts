@@ -159,6 +159,46 @@ test("fills a JSON card secret into several fields with one call", async () => {
   expect(client.transcript).not.toContain("4242424242424242");
 });
 
+test("redacts a card number the page reformats, re-renders and echoes", async () => {
+  const refs = (await client.callTool("list_secret_refs")).body as {
+    refs: { secretId: string; name?: string }[];
+  };
+  const card = refs.refs.find((r) => r.name === "demo-card");
+
+  await client.callTool("navigate", {
+    url: `${FIXTURE_ORIGIN}/checkout-formatted`,
+  });
+  const snap = (await client.callTool("snapshot")).body as {
+    elements: { uid: string; name?: string }[];
+  };
+  const byName = (name: string) =>
+    snap.elements.find((e) => e.name === name)!.uid;
+  const fill = await client.callTool("fill_secret", {
+    secret_id: card!.secretId,
+    fields: [
+      { key: "number", element_uid: byName("cardNumber") },
+      { key: "expiry", element_uid: byName("cardExpiry") },
+      { key: "cvc", element_uid: byName("cardCvc") },
+    ],
+  });
+  expect(fill.isError).toBe(false);
+
+  const snap2 = (await client.callTool("snapshot")).body as {
+    elements: { uid: string; name?: string; text?: string; value?: string }[];
+  };
+  // The page replaced the number input, so it has a fresh, untagged uid.
+  const number = snap2.elements.find((e) => e.name === "cardNumber")!;
+  expect(number.uid).not.toBe(byName("cardNumber"));
+  expect(number.value).toBe("[REDACTED:secret-filled-field]");
+  const summary = snap2.elements.find((e) => e.name === "summary")!;
+  expect(summary.value).toBe("[REDACTED:secret-filled-field]");
+  const pay = snap2.elements.find((e) => e.text?.startsWith("Pay"))!;
+  expect(pay.text).toBe(`Pay $9.99 with [REDACTED:${card!.secretId}]`);
+
+  expect(client.transcript).not.toContain("4242 4242 4242 4242");
+  expect(client.transcript).not.toMatch(/4242\D?4242\D?4242\D?4242/);
+});
+
 test("the plaintext never appeared anywhere in server output", () => {
   expect(client.transcript.length).toBeGreaterThan(0);
   expect(client.transcript).not.toContain(DEMO_PLAINTEXT);

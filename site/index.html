@@ -30,6 +30,11 @@
           while credentials remain in Turnkey Secrets. The agent receives a
           reference; the broker injects the secret directly into the browser.
         </p>
+        <p class="lede">
+          <strong>Status: alpha.</strong> Secure Browser MCP is in early
+          development and has no releases. Do not use it in production or with
+          real credentials yet.
+        </p>
         <div class="actions">
           <a class="button" href="setup.html">Set it up</a
           ><a
@@ -57,8 +62,8 @@
         <article class="card">
           <h3>Designed to be boring</h3>
           <p>
-            No secret values in model context, MCP output, or logs. There is no
-            arbitrary script-evaluation tool.
+            Every tool result is redacted before it reaches model context, MCP
+            output, or logs. There is no arbitrary script-evaluation tool.
           </p>
         </article>
       </section>
