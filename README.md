@@ -9,7 +9,7 @@
 </p>
 
 > [!WARNING]
-> **Status: alpha.** This project is in early development. It has no releases, and its API and security properties can change. Do not use it in production or with real credentials yet. The guarantees below are design goals that we test for.
+> **This project is in early development.** The API and security properties are subject to change. Use caution before using this system in production or with real credentials. The guarantees below are design goals that we test for.
 
 ## Features
 
