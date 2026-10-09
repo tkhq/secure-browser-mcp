@@ -26,6 +26,55 @@ test("scrubs separator-formatted copies of long values", () => {
   }
 });
 
+test("scrubs copies grouped with any separator", () => {
+  const r = registry();
+  for (const formatted of [
+    "4242,4242,4242,4242",
+    "4242'4242'4242'4242",
+    "4242·4242·4242·4242",
+    "4242:4242:4242:4242",
+    "4242x4242x4242x4242",
+    "4242\u200b4242\u200b4242\u200b4242",
+    "4242 , 4242 , 4242 , 4242",
+    "４２４２４２４２４２４２４２４２",
+  ]) {
+    expect(r.scrubText(`card ${formatted}.`)).toBe("card [REDACTED:card].");
+  }
+});
+
+test("scrubs URL-encoded and other-script copies", () => {
+  const r = registry();
+  for (const formatted of [
+    "4242%204242%204242%204242",
+    "4242%2C%204242%2C%204242%2C%204242",
+    "%34%32%34%32%34%32%34%32%34%32%34%32%34%32%34%32",
+    "٤٢٤٢ ٤٢٤٢ ٤٢٤٢ ٤٢٤٢",
+    "४२४२-४२४२-४२४२-४२४२",
+  ]) {
+    expect(r.scrubText(`card ${formatted}.`)).toBe("card [REDACTED:card].");
+  }
+});
+
+test("returns match spans for callers that map them back", () => {
+  const text = "4242 4242 | 4242 4242";
+  expect(registry().matches(text)).toEqual([
+    { start: 0, end: text.length, secretId: "card" },
+  ]);
+});
+
+test("does not stitch digits across wide gaps", () => {
+  const text = "4242 then later 4242 and 4242 and finally 4242";
+  expect(registry().scrubText(text)).toBe(text);
+});
+
+test("strips punctuation from long non-digit values", () => {
+  const r = new RedactionRegistry();
+  r.trackValue("sk_live_abc123def456", "key");
+  expect(r.scrubText("key: SK-LIVE:ABC123,DEF456 ok")).toBe(
+    "key: [REDACTED:key] ok",
+  );
+});
+
 test("folds case for long values", () => {
   const r = new RedactionRegistry();
   r.trackValue("gb82west12345698765432", "iban");

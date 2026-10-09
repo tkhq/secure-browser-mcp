@@ -8,9 +8,26 @@
 
 1. Destination bindings (`sbm:origin`, `sbm:url-pattern`, `sbm:selector`) fixed at import time. The broker refuses non-matching fills.
 2. No `evaluate_script` tool, so the agent cannot plant page JS that reads or intercepts a fill.
-3. Read-back scrubbing: snapshots, network logs, and screenshots cannot echo a filled value back into the context. This includes copies the page reformats (`4242 4242 4242 4242`), re-renders as a new node, or mirrors into other fields and text. Values of 8 characters or more also match with separators removed and case folded. Shorter values match exactly only.
+3. Read-back scrubbing: tool results (today, snapshots and error messages) cannot echo a filled value back into the context. This includes copies the page reformats (`4242 4242 4242 4242`), re-renders as a new node, mirrors into other fields and text, splits across several fields, or puts URL-encoded in the page URL. See [Limits of read-back scrubbing](#limits-of-read-back-scrubbing) for the exact matching rules.
 4. (Planned) Human confirmation via MCP Apps / elicitation before sensitive fills.
 5. (End state) The same binding enforced in Turnkey's policy engine, so the export itself fails for a wrong destination.
+
+### Limits of read-back scrubbing
+
+Two layers redact read-back. Structural redaction tags the fields that received a secret, and fields found holding a copy, and elides their values by element uid. The value scan then checks every string in every tool result for live plaintexts. The value scan uses these rules:
+
+- **Exact match:** every live value, of any length.
+- **Loose match:** values of 8 or more letters and digits. The scan compares letters and digits only, after Unicode NFKC normalization and case folding. It reads decimal digits in any script as 0-9 and decodes percent escapes (`%20`). Values made only of digits compare on digits only, so letters between groups also count as separators. Any character can be a separator, with at most 3 separator characters between two kept characters (`4242, 4242` matches; `4242 -- , 4242` does not).
+- **Split fields:** a snapshot also scans the values of its visible, untagged fields joined in document order, and redacts every field that holds part of a match.
+
+These cases are out of scope. They are encodings, or they need a page that works against the scanner, which is the target-site case below:
+
+- **Short values** (under 8 letters and digits: a CVC, an expiry, a PIN) match exactly only. A reformatted copy (`1 2 3`) is not caught unless it lands in a tagged field.
+- **Partial copies** (a last four, a BIN) are left alone on purpose.
+- **Wide or padded gaps:** more than 3 separator characters between groups, or groups interleaved with other letters and digits.
+- **Copies split across tool results:** half the value in one snapshot and half in the next. The scan does not join results.
+- **Split text outside field values:** the split-field check joins field values only, not button text or labels.
+- **Encodings:** reversal, base64, hex, multi-byte percent escapes, HTML entities in raw markup, and anything a page computes from the value.
 
 **Approver exposure.** Consensus approvers sign the export activity but cannot read the secret. The payload is encrypted to the broker's ephemeral key.
 

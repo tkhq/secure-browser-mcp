@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Northlake Supply — Checkout (split)</title>
+  </head>
+  <body>
+    <!--
+      Pages that show the number in pieces: on change it replaces the input
+      with four read-only inputs of four digits each, and, once the CVC is filled,
+      records the number, grouped and URL-encoded, in the page URL.
+    -->
+    <form id="checkout" action="/pay" method="post">
+      <label for="cardNumber">Card number</label>
+      <input type="text" id="cardNumber" name="cardNumber" />
+      <label for="cardExpiry">Expiry (MMYY)</label>
+      <input type="text" id="cardExpiry" name="cardExpiry" />
+      <label for="cardCvc">CVC</label>
+      <input type="password" id="cardCvc" name="cardCvc" />
+      <button type="submit" id="pay">Pay $9.99</button>
+    </form>
+    <script>
+      const input = document.getElementById("cardNumber");
+      input.addEventListener("change", () => {
+        const groups = input.value.replace(/\D/g, "").match(/\d{1,4}/g) ?? [];
+        const parts = groups.map((g, i) => {
+          const part = document.createElement("input");
+          part.name = `cardPart${i + 1}`;
+          part.readOnly = true;
+          part.value = g;
+          return part;
+        });
+        input.replaceWith(...parts);
+        // Wait for the last field so the URL change does not land mid-fill.
+        document.getElementById("cardCvc").addEventListener("change", () => {
+          history.replaceState(
+            null,
+            "",
+            "?card=" + encodeURIComponent(groups.join(" ")),
+          );
+        });
+      });
+    </script>
+  </body>
+</html>
