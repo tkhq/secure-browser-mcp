@@ -35,6 +35,8 @@ const INTERACTIVE_SELECTOR = [
   "[contenteditable=true]",
 ].join(", ");
 
+const REDACTED_FIELD = "[REDACTED:secret-filled-field]";
+
 type RawInfo = {
   tag: string;
   role?: string;
@@ -69,6 +71,10 @@ export async function captureSnapshot(
   const resolved: ResolvedElement[] = [];
   const elements: SnapshotElement[] = [];
 
+  // Values the page shows in the clear, in document order, so a secret the
+  // page splits across several fields can be found in their concatenation.
+  const shown: { uid: string; el: SnapshotElement; value: string }[] = [];
+
   for (const handle of handles) {
     const info = await describeElement(handle);
     if (!info.visible) {
@@ -97,19 +103,48 @@ export async function captureSnapshot(
         registry.trackField(uid, copied);
       }
       if (registry.isTaggedField(uid)) {
-        el.value = "[REDACTED:secret-filled-field]";
+        el.value = REDACTED_FIELD;
       } else if (info.isPassword) {
         // Password values are never echoed, filled or not.
         el.value = info.value.length === 0 ? "" : "[MASKED:password-field]";
       } else {
         el.value = info.value;
+        if (info.value.length > 0) shown.push({ uid, el, value: info.value });
       }
     }
     elements.push(el);
   }
 
+  tagSplitCopies(registry, shown);
   session.setElements(resolved);
   return { url: page.url(), title: await page.title(), elements };
+}
+
+/**
+ * Tag and redact fields that each hold part of a live secret, for pages that
+ * split one value across several inputs ("4242" "4242" "4242" "4242"). Each
+ * part is too short to match alone, so match the values joined in document
+ * order and redact every field a match touches.
+ */
+function tagSplitCopies(
+  registry: RedactionRegistry,
+  shown: { uid: string; el: SnapshotElement; value: string }[],
+): void {
+  if (shown.length < 2) return;
+  let joined = "";
+  const ranges = shown.map(({ value }) => {
+    const start = joined.length;
+    joined += value + " ";
+    return { start, end: start + value.length };
+  });
+  for (const span of registry.matches(joined)) {
+    shown.forEach(({ uid, el }, k) => {
+      const range = ranges[k]!;
+      if (range.start >= span.end || range.end <= span.start) return;
+      registry.trackField(uid, span.secretId);
+      el.value = REDACTED_FIELD;
+    });
+  }
 }
 
 function describeElement(handle: ElementHandle<Element>): Promise<RawInfo> {
