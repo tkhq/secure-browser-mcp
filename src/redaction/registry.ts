@@ -11,13 +11,20 @@
  *
  * The value-scan also catches reformatted copies. Pages normalize what they
  * receive ("4242424242424242" renders as "4242 4242 4242 4242"), so values
- * long enough to match safely are also compared with separators removed and
- * case folded. A hostile destination can always encode a value past any
- * scanner; that is the out-of-scope "target site" case in THREAT-MODEL.md.
+ * long enough to match safely are also compared on their letters and digits
+ * only, case folded and NFKC-normalized. Values made only of digits compare
+ * on digits only, so letter separators ("4242x4242") match too. Any
+ * separator counts, but each gap between kept characters is capped so a
+ * match cannot stitch together digits from unrelated text. A hostile
+ * destination can always encode a value past any scanner; that is the
+ * out-of-scope "target site" case in THREAT-MODEL.md.
  */
 
-/** Characters formatters insert between groups. */
-const SEPARATOR = /[\s\-./_]/;
+const ALNUM = /[\p{L}\p{N}]/u;
+const DIGIT = /\p{Nd}/u;
+
+/** Most separator characters allowed between two kept characters of a match. */
+const MAX_GAP = 3;
 
 /**
  * Shortest value matched loosely. Shorter values (a CVC, an expiry) would
@@ -25,9 +32,11 @@ const SEPARATOR = /[\s\-./_]/;
  */
 export const MIN_LOOSE_MATCH_LENGTH = 8;
 
-type LiveValue = { secretId: string; loose: string | undefined };
+type Loose = { text: string; keep: RegExp };
 
-type Span = { start: number; end: number; secretId: string };
+type LiveValue = { secretId: string; loose: Loose | undefined };
+
+export type Span = { start: number; end: number; secretId: string };
 
 export class RedactionRegistry {
   private readonly plaintexts = new Map<string, LiveValue>(); // value → info
@@ -35,10 +44,11 @@ export class RedactionRegistry {
 
   /** Register a live plaintext the moment it is exported into broker memory. */
   trackValue(plaintext: string, secretId: string): void {
-    const loose = normalize(plaintext).text;
+    const text = normalize(plaintext, ALNUM).text;
+    const keep = [...text].every((ch) => DIGIT.test(ch)) ? DIGIT : ALNUM;
     this.plaintexts.set(plaintext, {
       secretId,
-      loose: loose.length >= MIN_LOOSE_MATCH_LENGTH ? loose : undefined,
+      loose: text.length >= MIN_LOOSE_MATCH_LENGTH ? { text, keep } : undefined,
     });
   }
 
@@ -54,6 +64,11 @@ export class RedactionRegistry {
   /** The secretId of the first live plaintext in `text`, if any. */
   findSecret(text: string): string | undefined {
     return this.spans(text)[0]?.secretId;
+  }
+
+  /** Every live plaintext in `text`, as sorted, non-overlapping spans. */
+  matches(text: string): Span[] {
+    return this.spans(text);
   }
 
   /** Value-scan: replace every occurrence of a live plaintext in `text`. */
@@ -72,7 +87,7 @@ export class RedactionRegistry {
   /** Every match in `text`, sorted, with overlapping matches merged. */
   private spans(text: string): Span[] {
     const found: Span[] = [];
-    let normalized: ReturnType<typeof normalize> | undefined;
+    const normalized = new Map<RegExp, ReturnType<typeof normalize>>();
     for (const [value, { secretId, loose }] of this.plaintexts) {
       if (value.length === 0) continue;
       for (let i = text.indexOf(value); i !== -1;) {
@@ -80,12 +95,21 @@ export class RedactionRegistry {
         i = text.indexOf(value, i + value.length);
       }
       if (loose === undefined) continue;
-      normalized ??= normalize(text);
-      const { text: haystack, offsets } = normalized;
-      for (let i = haystack.indexOf(loose); i !== -1;) {
-        const last = i + loose.length - 1;
-        found.push({ start: offsets[i]!, end: offsets[last]! + 1, secretId });
-        i = haystack.indexOf(loose, i + loose.length);
+      let haystack = normalized.get(loose.keep);
+      if (!haystack) {
+        haystack = normalize(text, loose.keep);
+        normalized.set(loose.keep, haystack);
+      }
+      const { text: hay, starts, ends, gaps } = haystack;
+      const needle = loose.text;
+      for (let i = hay.indexOf(needle); i !== -1;) {
+        const last = i + needle.length - 1;
+        if (!withinGap(gaps, i, last)) {
+          i = hay.indexOf(needle, i + 1);
+          continue;
+        }
+        found.push({ start: starts[i]!, end: ends[last]!, secretId });
+        i = hay.indexOf(needle, i + needle.length);
       }
     }
     found.sort((a, b) => a.start - b.start || b.end - a.end);
@@ -102,19 +126,71 @@ export class RedactionRegistry {
   }
 }
 
-/**
- * Drop separators and fold case, one UTF-16 unit at a time, recording where
- * each kept unit came from so a match maps back to a span of the original.
- */
-function normalize(text: string): { text: string; offsets: number[] } {
-  let out = "";
-  const offsets: number[] = [];
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
-    if (SEPARATOR.test(ch)) continue;
-    const lower = ch.toLowerCase();
-    out += lower.length === 1 ? lower : ch;
-    offsets.push(i);
+/** Whether no gap between kept characters `first`..`last` exceeds MAX_GAP. */
+function withinGap(gaps: number[], first: number, last: number): boolean {
+  for (let k = first + 1; k <= last; k++) {
+    if (gaps[k]! > MAX_GAP) return false;
   }
-  return { text: out, offsets };
+  return true;
+}
+
+const PERCENT_ESCAPE = /^%[0-9a-f]{2}$/i;
+
+/**
+ * Keep only characters matching `keep`, NFKC-normalized, case folded and with
+ * decimal digits read as 0-9, one code point (or percent escape) at a time.
+ * Records the span of the original each kept character came from, so a match
+ * maps back to the original text, and how many characters were dropped
+ * before it.
+ */
+function normalize(
+  text: string,
+  keep: RegExp,
+): { text: string; starts: number[]; ends: number[]; gaps: number[] } {
+  let out = "";
+  const starts: number[] = [];
+  const ends: number[] = [];
+  const gaps: number[] = [];
+  let gap = 0;
+  let i = 0;
+  while (i < text.length) {
+    let unit = String.fromCodePoint(text.codePointAt(i)!);
+    let width = unit.length;
+    const escape = text.slice(i, i + 3);
+    if (PERCENT_ESCAPE.test(escape)) {
+      const byte = parseInt(escape.slice(1), 16);
+      // Multi-byte UTF-8 escapes stay separators: formatters emit ASCII digits.
+      unit = byte < 0x80 ? String.fromCharCode(byte) : "%";
+      width = 3;
+    }
+    for (const ch of unit.normalize("NFKC").toLowerCase()) {
+      if (!keep.test(ch)) {
+        gap++;
+        continue;
+      }
+      out += DIGIT.test(ch) ? digitValue(ch) : ch;
+      starts.push(i);
+      ends.push(i + width);
+      gaps.push(gap);
+      gap = 0;
+    }
+    i += width;
+  }
+  return { text: out, starts, ends, gaps };
+}
+
+/**
+ * The 0-9 value of a decimal digit in any script. Unicode lays each script's
+ * digits out as a contiguous run starting at zero, so the value is the
+ * position in that run.
+ */
+function digitValue(ch: string): string {
+  if (ch >= "0" && ch <= "9") return ch;
+  let cp = ch.codePointAt(0)!;
+  let n = 0;
+  while (DIGIT.test(String.fromCodePoint(cp - 1))) {
+    cp--;
+    n++;
+  }
+  return String(n % 10);
 }

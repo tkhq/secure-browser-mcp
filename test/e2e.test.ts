@@ -199,6 +199,45 @@ test("redacts a card number the page reformats, re-renders and echoes", async ()
   expect(client.transcript).not.toMatch(/4242\D?4242\D?4242\D?4242/);
 });
 
+test("redacts a card number the page splits across fields and the URL", async () => {
+  const refs = (await client.callTool("list_secret_refs")).body as {
+    refs: { secretId: string; name?: string }[];
+  };
+  const card = refs.refs.find((r) => r.name === "demo-card");
+
+  await client.callTool("navigate", {
+    url: `${FIXTURE_ORIGIN}/checkout-split`,
+  });
+  const snap = (await client.callTool("snapshot")).body as {
+    elements: { uid: string; name?: string }[];
+  };
+  const byName = (name: string) =>
+    snap.elements.find((e) => e.name === name)!.uid;
+  const fill = await client.callTool("fill_secret", {
+    secret_id: card!.secretId,
+    fields: [
+      { key: "number", element_uid: byName("cardNumber") },
+      { key: "expiry", element_uid: byName("cardExpiry") },
+      { key: "cvc", element_uid: byName("cardCvc") },
+    ],
+  });
+  expect(fill.isError).toBe(false);
+
+  const snap2 = (await client.callTool("snapshot")).body as {
+    url: string;
+    elements: { name?: string; value?: string }[];
+  };
+  const parts = snap2.elements.filter((e) => e.name?.startsWith("cardPart"));
+  expect(parts).toHaveLength(4);
+  for (const part of parts) {
+    expect(part.value).toBe("[REDACTED:secret-filled-field]");
+  }
+  expect(snap2.url).toBe(
+    `${FIXTURE_ORIGIN}/checkout-split?card=[REDACTED:${card!.secretId}]`,
+  );
+  expect(client.transcript).not.toMatch(/4242(%20|\D)?4242(%20|\D)?4242/);
+});
+
 test("the plaintext never appeared anywhere in server output", () => {
   expect(client.transcript.length).toBeGreaterThan(0);
   expect(client.transcript).not.toContain(DEMO_PLAINTEXT);
