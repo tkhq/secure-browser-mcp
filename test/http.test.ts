@@ -4,9 +4,10 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import {
+  Client,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
 
 import { FIXTURE_ORIGIN, startFixtureServer } from "./fixtures/serve.js";
 import { McpStdioClient } from "./mcp-client.js";
@@ -87,7 +88,7 @@ async function connect(): Promise<Session> {
           .catch(() => {});
         return res;
       },
-    }) as Transport,
+    }),
   );
   const call: Session["call"] = async (name, args = {}) => {
     const result = (await client.callTool({ name, arguments: args })) as {
@@ -137,6 +138,89 @@ test("requests without the bearer token are refused", async () => {
     body: "{}",
   });
   expect(wrong.status).toBe(401);
+});
+
+/** A 2026-07-28 request: no session, `_meta` envelope on the request. */
+function modernDiscover(): RequestInit {
+  return {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${TOKEN}`,
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2026-07-28",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 7,
+      method: "server/discover",
+      params: {
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          "io.modelcontextprotocol/clientInfo": { name: "probe", version: "0" },
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
+      },
+    }),
+  };
+}
+
+test("a 2026-07-28 request gets UnsupportedProtocolVersion", async () => {
+  const res = await fetch(url, modernDiscover());
+  expect(res.status).toBe(400);
+  expect(res.headers.get("mcp-session-id")).toBeNull();
+  const body = (await res.json()) as any;
+  expect(body.id).toBe(7);
+  expect(body.error.code).toBe(-32022);
+  expect(body.error.data.requested).toBe("2026-07-28");
+  expect(body.error.data.supported).toContain("2025-11-25");
+  expect(body.error.data.supported).not.toContain("2026-07-28");
+});
+
+test("a client pinned to 2026-07-28 fails; auto mode falls back", async () => {
+  const transport = () =>
+    new StreamableHTTPClientTransport(new URL(url), {
+      requestInit: { headers: { authorization: `Bearer ${TOKEN}` } },
+    });
+  const pinned = new Client(
+    { name: "pinned", version: "0" },
+    { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+  );
+  await expect(pinned.connect(transport())).rejects.toThrow();
+
+  const auto = new Client(
+    { name: "auto", version: "0" },
+    { versionNegotiation: { mode: "auto" } },
+  );
+  await auto.connect(transport());
+  expect(auto.getProtocolEra()).toBe("legacy");
+  expect((await auto.listTools()).tools.length).toBeGreaterThan(0);
+  await auto.close();
+});
+
+test("DELETE ends the session", async () => {
+  const transport = new StreamableHTTPClientTransport(new URL(url), {
+    requestInit: { headers: { authorization: `Bearer ${TOKEN}` } },
+  });
+  const client = new Client({ name: "delete-test", version: "0" });
+  await client.connect(transport);
+  const id = transport.sessionId;
+  expect(id).toBeString();
+  await transport.terminateSession();
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${TOKEN}`,
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-session-id": id!,
+      "mcp-protocol-version": "2025-11-25",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  });
+  expect(res.status).toBe(404);
+  await client.close();
 });
 
 test("lists the same tools as the stdio broker", async () => {
