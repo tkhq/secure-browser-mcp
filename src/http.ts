@@ -127,6 +127,9 @@ type Caller = {
   /** The OAuth client the token was issued to, if it names one. */
   client?: string;
   scopes: ReadonlySet<string>;
+  /** When the token expires, in ms since the epoch. Absent for the dev
+   * shared token, which does not expire. */
+  expiresAt?: number;
 };
 
 type AuthResult =
@@ -280,6 +283,7 @@ function tenantEndpoint(
             principal: JSON.stringify([p.issuer, p.subject]),
             ...(p.client !== undefined ? { client: p.client } : {}),
             scopes: p.scopes,
+            expiresAt: p.expiresAt * 1_000,
           },
         };
       } catch {
@@ -487,6 +491,34 @@ function refuse(
     },
     { "www-authenticate": header },
   );
+}
+
+/**
+ * End a GET (server-to-client SSE) stream when the token that opened it
+ * expires. Each POST is checked against its own token, but a GET stream
+ * stays open for as long as the client keeps it, so it would outlive the
+ * token. The client reconnects with a fresh token.
+ *
+ * The transport allows one GET stream per session and ends a second GET
+ * at once, so a GET response still open at expiry is the session's GET
+ * stream.
+ */
+function endStreamAtExpiry(
+  s: Session,
+  res: ServerResponse,
+  expiresAt: number,
+): void {
+  const timer = setTimeout(
+    () => {
+      s.transport.closeStandaloneSSEStream();
+      // Closing the stream ends the response; if it does not, drop the
+      // connection.
+      setTimeout(() => res.destroy(), 1_000).unref();
+    },
+    Math.max(0, expiresAt - Date.now()),
+  );
+  timer.unref();
+  res.once("close", () => clearTimeout(timer));
 }
 
 async function main(): Promise<void> {
@@ -699,6 +731,9 @@ async function main(): Promise<void> {
       }
       res.once("finish", reserved.done);
       res.once("close", reserved.done);
+      if (req.method === "GET" && caller.expiresAt !== undefined) {
+        endStreamAtExpiry(s, res, caller.expiresAt);
+      }
       return s.transport.handleRequest(req, res, body);
     }
 

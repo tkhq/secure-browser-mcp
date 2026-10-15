@@ -59,6 +59,8 @@ export type Principal = {
    * when the token names one. */
   client?: string;
   scopes: Set<string>;
+  /** The token's `exp`, in seconds since the epoch. */
+  expiresAt: number;
 };
 
 /** The client a token was issued to. OpenID Connect and Keycloak use
@@ -180,5 +182,6 @@ export async function verifyAccessToken(
     subject: payload.sub,
     ...(client !== undefined ? { client } : {}),
     scopes: parseScopes(payload),
+    expiresAt: exp,
   };
 }

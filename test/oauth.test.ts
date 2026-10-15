@@ -790,6 +790,43 @@ test("a request id in flight cannot be reused in the session", async () => {
   expect(note.status).toBe(202);
 }, 30_000);
 
+test("a GET stream ends when its token expires", async () => {
+  const long = await token(asA, "delta", { sub: "erin" });
+  const sessionId = await rawSession("delta", long);
+  const get = (bearer: string) =>
+    fetch(mcpUrl("delta"), {
+      headers: {
+        accept: "text/event-stream",
+        "mcp-protocol-version": "2025-06-18",
+        "mcp-session-id": sessionId,
+        authorization: `Bearer ${bearer}`,
+      },
+    });
+
+  const short = await asA.mint({
+    aud: mcpUrl("delta"),
+    sub: "erin",
+    scope: ALL,
+    expiresIn: 2,
+  });
+  const started = Date.now();
+  const stream = await get(short);
+  expect(stream.status).toBe(200);
+  expect(stream.headers.get("content-type")).toContain("text/event-stream");
+  // Read until the broker ends the stream; the test timeout catches a
+  // stream that never ends.
+  const reader = stream.body!.getReader();
+  while (!(await reader.read()).done);
+  const elapsed = Date.now() - started;
+  expect(elapsed).toBeGreaterThan(1_000);
+  expect(elapsed).toBeLessThan(5_000);
+
+  // The session's one GET stream is free again, for a fresh token.
+  const again = await get(long);
+  expect(again.status).toBe(200);
+  await again.body?.cancel();
+}, 15_000);
+
 test("one principal or tenant cannot take every session slot", async () => {
   /** Open sessions until refused; returns how many opened, and the
    * refusal. */
