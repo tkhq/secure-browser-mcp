@@ -41,8 +41,12 @@ export class BrowserSession {
       this.browser = undefined;
     });
 
-    const pages = await this.browser.pages();
-    this.page = pages[0] ?? (await this.browser.newPage());
+    if (this.host.openPage) {
+      this.page = await this.host.openPage(this.browser);
+    } else {
+      const pages = await this.browser.pages();
+      this.page = pages[0] ?? (await this.browser.newPage());
+    }
     this.cdp = await this.page.createCDPSession();
     // Element uids are backendNodeId-based and die with the document.
     this.page.on("framenavigated", (frame) => {

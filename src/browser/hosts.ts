@@ -9,17 +9,28 @@
  *  - `BrowserbaseHost`: a Browserbase session reached over its CDP
  *    WebSocket. The browser runs on Browserbase, so Browserbase can see
  *    secret plaintext during a fill (docs/THREAT-MODEL.md, "Hosted broker").
+ *  - `LightpandaHost` (experimental): a Lightpanda process on this machine,
+ *    one per session, reached over a CDP WebSocket on a loopback port.
+ *    Lightpanda has no sandbox and its CDP port has no authentication
+ *    (docs/THREAT-MODEL.md, "Lightpanda").
  */
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import puppeteer, { type Browser } from "puppeteer-core";
+import puppeteer, { type Browser, type Page } from "puppeteer-core";
 
 export interface BrowserHost {
-  readonly kind: "local" | "browserbase";
+  readonly kind: "local" | "browserbase" | "lightpanda";
   /** Start a fresh browser for one agent session. */
   start(): Promise<Browser>;
+  /**
+   * The page the session drives. Without this, the session uses the
+   * browser's first page, or opens one.
+   */
+  openPage?(browser: Browser): Promise<Page>;
   /** Tear the browser down; safe to call when nothing is running. */
   stop(): Promise<void>;
 }
@@ -167,4 +178,156 @@ export class BrowserbaseHost implements BrowserHost {
     }
     return res.json();
   }
+}
+
+export type LightpandaConfig = {
+  /** Path to the Lightpanda executable. */
+  executablePath: string;
+  /** Extra `lightpanda serve` flags from the deployment (SBM_LIGHTPANDA_ARGS). */
+  extraArgs?: string[];
+  /** How long to wait for the CDP server to accept connections. */
+  startTimeoutMs?: number;
+};
+
+/**
+ * Experimental. One `lightpanda serve` process per session, on a random
+ * loopback port. Lightpanda serves CDP over TCP without authentication, so
+ * any process on this host that finds the port can attach while the
+ * session runs: run the broker where nothing else does.
+ */
+export class LightpandaHost implements BrowserHost {
+  readonly kind = "lightpanda";
+  private browser: Browser | undefined;
+  private process: ChildProcess | undefined;
+  /** Settles when the process is gone: it exited, or it never started. */
+  private exited: Promise<string> | undefined;
+
+  constructor(private readonly config: LightpandaConfig) {}
+
+  async start(): Promise<Browser> {
+    const port = await freeLoopbackPort();
+    const child = spawn(
+      this.config.executablePath,
+      [
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(port),
+        // One session per process: refuse a second CDP client.
+        "--cdp-max-connections",
+        "1",
+        // Without this, iframes (card fields, for example) never load.
+        "--load-resources",
+        "iframe",
+        "--disable-metrics",
+        ...(this.config.extraArgs ?? []),
+      ],
+      {
+        // Lightpanda sends usage telemetry unless this is set.
+        env: { ...process.env, LIGHTPANDA_DISABLE_TELEMETRY: "true" },
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
+    this.process = child;
+    // A spawn that fails (no such binary) emits "error" and never "exit".
+    this.exited = new Promise((resolve) => {
+      child.once("exit", (code, signal) =>
+        resolve(`process exited (${code ?? signal})`),
+      );
+      child.once("error", (err) => resolve(err.message));
+    });
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString()).slice(-2000);
+    });
+    try {
+      const endpoint = await waitForCdp(
+        port,
+        this.exited,
+        this.config.startTimeoutMs ?? 10_000,
+      );
+      this.browser = await puppeteer.connect({
+        browserWSEndpoint: endpoint,
+        defaultViewport: null,
+      });
+    } catch (err) {
+      await this.stop();
+      throw new Error(
+        `Lightpanda did not start: ${(err as Error).message}` +
+          (stderr ? ` (stderr: ${stderr.trim().split("\n").pop()})` : ""),
+      );
+    }
+    return this.browser;
+  }
+
+  /**
+   * Lightpanda's default page has no browser context, so CDP calls on it
+   * fail. A page in a new context works. Lightpanda allows one page per
+   * connection, which matches one page per session.
+   */
+  async openPage(browser: Browser): Promise<Page> {
+    const context = await browser.createBrowserContext();
+    return context.newPage();
+  }
+
+  async stop(): Promise<void> {
+    await this.browser?.disconnect().catch(() => {});
+    this.browser = undefined;
+    const child = this.process;
+    const exited = this.exited;
+    this.process = undefined;
+    this.exited = undefined;
+    if (child && exited) {
+      child.kill("SIGTERM");
+      const timer = setTimeout(() => child.kill("SIGKILL"), 2_000);
+      await exited;
+      clearTimeout(timer);
+    }
+  }
+}
+
+/** A port that was free a moment ago. Lightpanda fails to start if it is
+ * taken in between, and the session reports the error. */
+function freeLoopbackPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      server.close(() =>
+        typeof address === "object" && address
+          ? resolve(address.port)
+          : reject(new Error("no port")),
+      );
+    });
+  });
+}
+
+/** Polls the CDP discovery endpoint until it answers, the process is gone,
+ * or the timeout passes. Returns the browser WebSocket URL. */
+async function waitForCdp(
+  port: number,
+  exited: Promise<string>,
+  timeoutMs: number,
+): Promise<string> {
+  let gone: string | undefined;
+  void exited.then((reason) => (gone = reason));
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (gone) throw new Error(gone);
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/json/version`);
+      if (res.ok) {
+        const { webSocketDebuggerUrl } = (await res.json()) as {
+          webSocketDebuggerUrl?: string;
+        };
+        return webSocketDebuggerUrl ?? `ws://127.0.0.1:${port}/`;
+      }
+    } catch {
+      // Not listening yet.
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`CDP did not answer within ${timeoutMs} ms`);
 }
