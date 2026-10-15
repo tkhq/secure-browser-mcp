@@ -6,7 +6,7 @@ export const navigate = defineTool({
   name: "navigate",
   description: "Navigate the broker-owned browser to a URL.",
   inputSchema: {
-    url: z.string().url(),
+    url: z.url(),
   },
   handler: async (ctx, args) => {
     const page = await ctx.session.ensureStarted();
