@@ -160,6 +160,7 @@ Opening a session needs a valid token with at least one of these scopes; a token
 - No token, or an invalid one: `401` with `WWW-Authenticate: Bearer error="invalid_token", scope="sbm:browse sbm:fill sbm:refs", resource_metadata="<metadata URL>"` (no `error` when the request had no token, or used a scheme other than `Bearer`). MCP clients follow `resource_metadata` to find the authorization server.
 - A malformed `Bearer` header (no token, more than one value, or characters a bearer token cannot have): `400` with `error="invalid_request"`, the same `scope`, and `resource_metadata`.
 - A tool call without the tool's scope: `403` with `WWW-Authenticate: Bearer error="insufficient_scope", scope="<the scope the tool needs>", resource_metadata="..."`. A batch that calls several tools names every missing scope in one challenge.
+- A request that reuses a JSON-RPC id already in flight in its session, or a batch that has one id twice: `409` with JSON-RPC error `-32600`. See [Sessions](#sessions).
 - An unknown tenant: `404`.
 - The broker, or the tenant, at its session limit: `503`.
 
@@ -228,6 +229,7 @@ A client that negotiates the version (MCP TypeScript SDK v2 `versionNegotiation:
 - Each MCP session gets its own browser (a local Chrome process with a fresh profile, or a new Browserbase session), its own redaction registry, and its own element uids. One session cannot see another session's pages, cookies, or snapshots.
 - A session belongs to the tenant and the token subject (`iss` and `sub`) that opened it. A request with that session id from another tenant's endpoint or another subject gets `404 Session not found`.
 - Browserbase sessions start with recording and session logs off, and with `keepAlive: false`. The broker releases the Browserbase session when the MCP session closes.
+- Two requests in flight in one session cannot have the same JSON-RPC id. The transport sends each response to the request with the matching id, so a second request with that id would get the first one's response, even when its token lacks the first one's scope. The broker refuses such a request with `409`. An id is free again when the server has answered it and its HTTP response has ended. If the client disconnects before the answer, the id stays in use until the server answers.
 - A session sees only the pending fills it parked. `await_fill` with a fill id that belongs to another live session, another subject, or another tenant returns `Unknown fill_id`.
 - The broker closes a session's browser when the client sends `DELETE`, when the session is idle for `SBM_SESSION_IDLE_S`, and at shutdown.
 

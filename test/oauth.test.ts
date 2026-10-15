@@ -29,6 +29,8 @@ import { MockAuthServer } from "./mock-auth-server.js";
  *    too means a token A minted for alpha fails at beta on audience alone.
  *  - gamma trusts B and sets an `audience` override, for an authorization
  *    server that cannot put the resource URI in `aud`.
+ *  - delta trusts A and holds the default mock secrets, for tests that
+ *    need sessions of their own.
  */
 
 const DEMO_PLAINTEXT = "mock-demo-p@ssw0rd-1234"; // mock-secrets.ts seed
@@ -36,6 +38,7 @@ const BETA_PLAINTEXT = "beta-only-plaintext-0000";
 const ALL = "sbm:browse sbm:fill sbm:refs";
 const GAMMA_AUDIENCE = "api://sbm-gamma";
 const ALLOWED_ORIGIN = "https://allowed.example";
+const LIST_DELAY_MS = 1_000;
 
 const work = mkdtempSync(join(tmpdir(), "sbm-oauth-"));
 const stateDir = join(work, "state");
@@ -71,11 +74,13 @@ async function startBroker() {
       SBM_HTTP_PORT: String(port),
       SBM_STATE_DIR: stateDir,
       SBM_STATE_KEY: stateKey,
-      // Three tenants, four slots each by default.
-      SBM_MAX_SESSIONS: "12",
+      // Four tenants, four slots each by default.
+      SBM_MAX_SESSIONS: "16",
       SBM_ALLOWED_ORIGINS: ALLOWED_ORIGIN,
       SBM_MOCK_CONSENSUS: "demo-login-password",
       SBM_MOCK_CONSENSUS_DELAY_MS: "2000",
+      // Long enough to hold a list_secret_refs call in flight.
+      SBM_MOCK_LIST_DELAY_MS: String(LIST_DELAY_MS),
     },
   });
   let log = "";
@@ -137,11 +142,13 @@ async function connect(tenant: string, bearer: string): Promise<Session> {
   return { client, call };
 }
 
-/** One raw JSON-RPC POST, for status codes and headers the SDK hides. */
+/** One raw JSON-RPC POST, for status codes and headers the SDK hides. A
+ * message gets `jsonrpc` and `id: 1` unless it sets its own; an array is
+ * sent as given, as a batch. */
 async function rpc(
   tenant: string,
   bearer: string | undefined,
-  message: object,
+  message: object | object[],
   sessionId?: string,
 ): Promise<Response> {
   const res = await fetch(mcpUrl(tenant), {
@@ -153,7 +160,9 @@ async function rpc(
       ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
       ...(sessionId ? { "mcp-session-id": sessionId } : {}),
     },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...message }),
+    body: JSON.stringify(
+      Array.isArray(message) ? message : { jsonrpc: "2.0", id: 1, ...message },
+    ),
   });
   transcript += await res.clone().text();
   return res;
@@ -239,6 +248,11 @@ beforeAll(async () => {
           backend: "mock",
           issuers: [{ issuer: asB.issuer, jwksUri: asB.jwksUri }],
           audience: GAMMA_AUDIENCE,
+        },
+        {
+          id: "delta",
+          backend: "mock",
+          issuers: [{ issuer: asA.issuer, jwksUri: asA.jwksUri }],
         },
       ],
     }),
@@ -632,8 +646,103 @@ test("a client-credentials token with scp scopes can use the tools", async () =>
   expect(fill.headers.get("www-authenticate")).toContain('scope="sbm:fill"');
 }, 30_000);
 
+test("a request id in flight cannot be reused in the session", async () => {
+  // Two tokens of one subject share a session: one may list secret refs,
+  // the other may only browse.
+  const refsToken = await token(asA, "delta", { sub: "dana" });
+  const browseOnly = await token(asA, "delta", {
+    sub: "dana",
+    scope: "sbm:browse",
+  });
+  const sessionId = await rawSession("delta", refsToken);
+  const listRefs = {
+    id: 7,
+    method: "tools/call",
+    params: { name: "list_secret_refs" },
+  };
+  const navigate = (url: string) => ({
+    id: 7,
+    method: "tools/call",
+    params: { name: "navigate", arguments: { url } },
+  });
+  // A page that loads slower than list_secret_refs answers, so the
+  // browse-only call is still open when the refs result is sent.
+  const slowPage = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: async () => {
+      await Bun.sleep(LIST_DELAY_MS * 2);
+      return new Response("<title>slow</title>", {
+        headers: { "content-type": "text/html" },
+      });
+    },
+  });
+
+  // The browse-only call reuses the id while list_secret_refs is in
+  // flight. If the broker forwarded it, the transport would send the refs
+  // result on the browse-only call's stream.
+  const slow = rpc("delta", refsToken, listRefs, sessionId);
+  await Bun.sleep(LIST_DELAY_MS / 5);
+  const dup = await rpc(
+    "delta",
+    browseOnly,
+    navigate(`http://127.0.0.1:${slowPage.port}/`),
+    sessionId,
+  ).finally(() => slowPage.stop(true));
+  const dupText = await dup.text();
+  expect(dup.status).toBe(409);
+  expect(dupText).not.toContain("demo-login-password");
+  expect(JSON.parse(dupText)).toMatchObject({
+    error: { code: -32600 },
+    id: null,
+  });
+
+  const first = await slow;
+  expect(first.status).toBe(200);
+  expect(await first.text()).toContain("demo-login-password");
+
+  // The id is free once the call is done.
+  const again = await rpc(
+    "delta",
+    browseOnly,
+    navigate(`${FIXTURE_ORIGIN}/login`),
+    sessionId,
+  );
+  expect(again.status).toBe(200);
+  expect(await again.text()).not.toContain("demo-login-password");
+
+  // Each request still gets the scopes of its own token.
+  expect((await rpc("delta", browseOnly, listRefs, sessionId)).status).toBe(
+    403,
+  );
+  const stepUp = await rpc("delta", refsToken, listRefs, sessionId);
+  expect(stepUp.status).toBe(200);
+  expect(await stepUp.text()).toContain("demo-login-password");
+
+  // One id twice in a batch is refused too, and forwards neither.
+  const batch = await rpc(
+    "delta",
+    refsToken,
+    [
+      { jsonrpc: "2.0", ...listRefs, id: 8 },
+      { jsonrpc: "2.0", id: 8, method: "tools/list" },
+    ],
+    sessionId,
+  );
+  expect(batch.status).toBe(409);
+  expect(await batch.text()).not.toContain("demo-login-password");
+  // Notifications carry no id and are never refused.
+  const note = await rpc(
+    "delta",
+    refsToken,
+    [{ jsonrpc: "2.0", method: "notifications/initialized" }],
+    sessionId,
+  );
+  expect(note.status).toBe(202);
+}, 30_000);
+
 test("one tenant cannot take every session slot", async () => {
-  // 12 slots and 3 tenants: beta gets at most 4, and alpha still gets in.
+  // 16 slots and 4 tenants: beta gets at most 4, and alpha still gets in.
   const betaToken = await token(asB, "beta", { sub: "greedy" });
   let opened = 0;
   let res: Response;

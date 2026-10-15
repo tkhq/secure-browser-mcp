@@ -28,6 +28,8 @@ import type { ToolContext } from "./tools/tool.js";
 // SBM_MOCK_CONSENSUS (comma-separated secret names) makes those mock secrets
 // consensus-gated, with approval arriving SBM_MOCK_CONSENSUS_DELAY_MS after
 // the first export attempt — enough to exercise the pending → await flow.
+// SBM_MOCK_LIST_DELAY_MS (tests only) makes every mock listRefs call take
+// that long.
 export type Secrets = {
   client: SecretsClient;
   backend: "mock" | "turnkey";
@@ -44,12 +46,13 @@ export function makeSecretsClient(): Secrets {
 function mockFromEnv(seed?: TenantMockSeed): MockSecretsClient {
   const consensus = process.env["SBM_MOCK_CONSENSUS"];
   const delay = Number(process.env["SBM_MOCK_CONSENSUS_DELAY_MS"] ?? "3000");
-  return new MockSecretsClient(
-    seed,
-    consensus
+  const listDelayMs = Number(process.env["SBM_MOCK_LIST_DELAY_MS"] ?? "0");
+  return new MockSecretsClient(seed, {
+    ...(consensus
       ? { consensusNames: consensus.split(","), approvalDelayMs: delay }
-      : {},
-  );
+      : {}),
+    ...(listDelayMs > 0 ? { listDelayMs } : {}),
+  });
 }
 
 type TenantMockSeed = Extract<TenantConfig, { backend: "mock" }>["mockSecrets"];

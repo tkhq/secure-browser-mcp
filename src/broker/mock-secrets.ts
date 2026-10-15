@@ -18,6 +18,8 @@ type MockOptions = {
   consensusNames?: string[];
   /** How long after the first export attempt approval "arrives". */
   approvalDelayMs?: number;
+  /** Tests only: how long listRefs takes, to hold a call in flight. */
+  listDelayMs?: number;
 };
 
 /**
@@ -95,6 +97,7 @@ export class MockSecretsClient implements SecretsClient {
   private readonly secrets = new Map<string, MockSecret>();
   private readonly consensusNames: Set<string>;
   private readonly approvalDelayMs: number;
+  private readonly listDelayMs: number;
   /** secretId → when the first export attempt happened; approval "arrives"
    * approvalDelayMs later, simulating an out-of-band approver. */
   private readonly pendingSince = new Map<string, number>();
@@ -105,9 +108,13 @@ export class MockSecretsClient implements SecretsClient {
     }
     this.consensusNames = new Set(opts?.consensusNames ?? []);
     this.approvalDelayMs = opts?.approvalDelayMs ?? 3_000;
+    this.listDelayMs = opts?.listDelayMs ?? 0;
   }
 
   async listRefs(): Promise<SecretRef[]> {
+    if (this.listDelayMs > 0) {
+      await new Promise((r) => setTimeout(r, this.listDelayMs));
+    }
     return [...this.secrets.entries()].map(([secretId, s]) => {
       const ref: SecretRef = {
         secretId,

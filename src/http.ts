@@ -16,7 +16,8 @@
  * Sessions. Each MCP session gets its own ToolContext (its own browser,
  * redaction registry, and view of the pending fills) and is bound to the
  * tenant and token subject that opened it. Closing the session (DELETE,
- * idle timeout, or shutdown) closes its browser.
+ * idle timeout, or shutdown) closes its browser. Two requests in flight in
+ * one session cannot share a JSON-RPC id (src/inflight.ts).
  *
  * Protocol: the 2025-era session protocol (initialize, Mcp-Session-Id),
  * through to 2025-11-25. A 2026-07-28 request (no session, per-request
@@ -87,6 +88,7 @@ import {
   type TenantConfig,
 } from "./auth/tenants.js";
 import { JwksCache, verifyAccessToken } from "./auth/tokens.js";
+import { InFlightIds } from "./inflight.js";
 import {
   FilePendingFillStore,
   MemoryPendingFillStore,
@@ -146,6 +148,8 @@ type Session = {
   lastSeen: number;
   endpoint: string;
   principal: string;
+  /** JSON-RPC request ids in flight; see src/inflight.ts. */
+  inFlight: InFlightIds;
 };
 
 function envInt(name: string, fallback: number): number {
@@ -346,12 +350,13 @@ function send(
   res.end(JSON.stringify(body));
 }
 
-function rpcError(res: ServerResponse, status: number, message: string) {
-  send(res, status, {
-    jsonrpc: "2.0",
-    error: { code: -32000, message },
-    id: null,
-  });
+function rpcError(
+  res: ServerResponse,
+  status: number,
+  message: string,
+  { code = -32000 }: { code?: number } = {},
+) {
+  send(res, status, { jsonrpc: "2.0", error: { code, message }, id: null });
 }
 
 /**
@@ -564,6 +569,7 @@ async function main(): Promise<void> {
       isLive,
     });
     const ctx = sessionContext(endpoint.broker, fills);
+    const inFlight = new InFlightIds();
     const transport = new NodeStreamableHTTPServerTransport({
       sessionIdGenerator: () => id,
       onsessioninitialized: () => {
@@ -573,11 +579,27 @@ async function main(): Promise<void> {
           lastSeen: Date.now(),
           endpoint: endpoint.id,
           principal: caller.principal,
+          inFlight,
         });
       },
     });
     transport.onclose = () => void closeSession(id);
     await createServer(ctx).connect(transport);
+    // Watch what passes between the transport and the server, so an id is
+    // released only when the server is done with it.
+    const deliver = transport.onmessage;
+    transport.onmessage = (message, extra) => {
+      inFlight.inbound(message);
+      deliver?.(message, extra);
+    };
+    const sendToClient = transport.send.bind(transport);
+    transport.send = async (message, options) => {
+      try {
+        await sendToClient(message, options);
+      } finally {
+        inFlight.outbound(message);
+      }
+    };
     return transport;
   };
 
@@ -636,6 +658,23 @@ async function main(): Promise<void> {
         return rpcError(res, 404, "Session not found");
       }
       s.lastSeen = Date.now();
+      // The transport maps responses by JSON-RPC id, so a request that
+      // reuses an id in flight would get the other request's response,
+      // which another token's scopes allowed (src/inflight.ts).
+      const reserved = s.inFlight.reserve(body);
+      if (!reserved.ok) {
+        // id null: an answer with the reused id would look, to the client,
+        // like the answer to the request that holds it.
+        return rpcError(
+          res,
+          409,
+          `Request id ${JSON.stringify(reserved.id)} is already in use ` +
+            "in this session",
+          { code: -32600 },
+        );
+      }
+      res.once("finish", reserved.done);
+      res.once("close", reserved.done);
       return s.transport.handleRequest(req, res, body);
     }
 
