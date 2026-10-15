@@ -79,6 +79,13 @@ const common = {
    * and single-valued, and no two tenants may share an audience.
    */
   audience: z.string().min(1).optional(),
+  /**
+   * The OAuth clients whose tokens this tenant accepts, by the token's
+   * `azp` (else `client_id`). Without it, the tenant trusts every client
+   * its authorization servers issue tokens to, including dynamically
+   * registered ones.
+   */
+  allowedClients: z.array(z.string().min(1)).min(1).optional(),
 };
 
 const tenantSchema = z.discriminatedUnion("backend", [

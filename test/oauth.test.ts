@@ -31,6 +31,7 @@ import { MockAuthServer } from "./mock-auth-server.js";
  *    server that cannot put the resource URI in `aud`.
  *  - delta trusts A and holds the default mock secrets, for tests that
  *    need sessions of their own.
+ *  - epsilon trusts A and accepts only the clients in its allowedClients.
  */
 
 const DEMO_PLAINTEXT = "mock-demo-p@ssw0rd-1234"; // mock-secrets.ts seed
@@ -74,8 +75,8 @@ async function startBroker() {
       SBM_HTTP_PORT: String(port),
       SBM_STATE_DIR: stateDir,
       SBM_STATE_KEY: stateKey,
-      // Four tenants, four slots each by default.
-      SBM_MAX_SESSIONS: "16",
+      // Five tenants, four slots each by default.
+      SBM_MAX_SESSIONS: "20",
       SBM_ALLOWED_ORIGINS: ALLOWED_ORIGIN,
       SBM_MOCK_CONSENSUS: "demo-login-password",
       SBM_MOCK_CONSENSUS_DELAY_MS: "2000",
@@ -100,7 +101,7 @@ async function startBroker() {
 const token = (
   as: MockAuthServer,
   tenant: string,
-  opts: { sub?: string; scope?: string } = {},
+  opts: { sub?: string; scope?: string; claims?: Record<string, unknown> } = {},
 ) => as.mint({ aud: mcpUrl(tenant), scope: ALL, ...opts });
 
 type Session = {
@@ -253,6 +254,12 @@ beforeAll(async () => {
           id: "delta",
           backend: "mock",
           issuers: [{ issuer: asA.issuer, jwksUri: asA.jwksUri }],
+        },
+        {
+          id: "epsilon",
+          backend: "mock",
+          issuers: [{ issuer: asA.issuer, jwksUri: asA.jwksUri }],
+          allowedClients: ["agent-app", "other-app"],
         },
       ],
     }),
@@ -543,6 +550,47 @@ test("a session answers only to the tenant and subject that opened it", async ()
   expect((await rpc("beta", betaAlice, list, sessionId)).status).toBe(404);
 });
 
+test("a session answers only to the OAuth client that opened it", async () => {
+  const withClient = (claims: Record<string, unknown>) =>
+    token(asA, "delta", { sub: "carol", claims });
+  const sessionId = await rawSession(
+    "delta",
+    await withClient({ azp: "app-1" }),
+  );
+  const list = { method: "tools/list" };
+
+  // The same client, by azp or client_id, is the same caller.
+  for (const claims of [{ azp: "app-1" }, { client_id: "app-1" }]) {
+    expect(
+      (await rpc("delta", await withClient(claims), list, sessionId)).status,
+    ).toBe(200);
+  }
+  // Another client of the same subject, or a token that names no client,
+  // does not see the session.
+  for (const claims of [{ azp: "app-2" }, { client_id: "app-2" }, {}]) {
+    expect(
+      (await rpc("delta", await withClient(claims), list, sessionId)).status,
+    ).toBe(404);
+  }
+});
+
+test("a tenant with allowedClients refuses tokens of other clients", async () => {
+  const withClient = (claims: Record<string, unknown>) =>
+    token(asA, "epsilon", { claims });
+  for (const claims of [{ azp: "agent-app" }, { client_id: "other-app" }]) {
+    expect(
+      (await rpc("epsilon", await withClient(claims), initialize)).status,
+    ).toBe(200);
+  }
+  for (const claims of [{}, { azp: "rogue-app" }, { client_id: "rogue" }]) {
+    const res = await rpc("epsilon", await withClient(claims), initialize);
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toContain(
+      'error="invalid_token"',
+    );
+  }
+});
+
 test("tenants see only their own secrets and fills, across a restart", async () => {
   const aliceToken = await token(asA, "alpha", { sub: "alice" });
   const alpha = await connect("alpha", aliceToken);
@@ -742,7 +790,7 @@ test("a request id in flight cannot be reused in the session", async () => {
 }, 30_000);
 
 test("one tenant cannot take every session slot", async () => {
-  // 16 slots and 4 tenants: beta gets at most 4, and alpha still gets in.
+  // 20 slots and 5 tenants: beta gets at most 4, and alpha still gets in.
   const betaToken = await token(asB, "beta", { sub: "greedy" });
   let opened = 0;
   let res: Response;

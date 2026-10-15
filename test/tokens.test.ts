@@ -215,3 +215,43 @@ test("rejects a token that lives longer than 24 hours", async () => {
     jwks,
   );
 });
+
+test("reports the token's client, from azp or else client_id", async () => {
+  const jwks = new JwksCache();
+  const clientOf = async (claims: Record<string, unknown>) =>
+    (
+      await verifyAccessToken(
+        await as.mint({ aud: AUDIENCE, claims }),
+        expectFor(),
+        jwks,
+      )
+    ).client;
+  expect(await clientOf({ azp: "app-1" })).toBe("app-1");
+  expect(await clientOf({ client_id: "app-2" })).toBe("app-2");
+  expect(await clientOf({ azp: "app-1", client_id: "app-2" })).toBe("app-1");
+  expect(await clientOf({})).toBeUndefined();
+});
+
+test("with allowedClients, accepts only tokens of those clients", async () => {
+  const jwks = new JwksCache();
+  const only = { ...expectFor(), allowedClients: ["agent-app"] };
+  const mint = (claims: Record<string, unknown>) =>
+    as.mint({ aud: AUDIENCE, claims });
+
+  for (const claims of [{ azp: "agent-app" }, { client_id: "agent-app" }]) {
+    const p = await verifyAccessToken(await mint(claims), only, jwks);
+    expect(p.client).toBe("agent-app");
+  }
+  for (const claims of [
+    {},
+    { azp: "rogue-app" },
+    { client_id: "rogue-app" },
+    // azp names the client when both are present.
+    { azp: "rogue-app", client_id: "agent-app" },
+  ]) {
+    const err = await verifyAccessToken(await mint(claims), only, jwks).catch(
+      (e) => e,
+    );
+    expect(err).toBeInstanceOf(InvalidTokenError);
+  }
+});

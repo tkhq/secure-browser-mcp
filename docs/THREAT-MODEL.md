@@ -62,7 +62,8 @@ The hosted broker (`src/http.ts`, [HOSTED.md](HOSTED.md)) is a Turnkey-operated 
 What this changes from step 1:
 
 - A caller reaches only its tenant's secrets: the broker uses the tenant's API key, and Turnkey policy on that key bounds what it can export. Without per-tenant keys scoped by Turnkey policy, tenant separation rests on the broker's routing alone.
-- A session is bound to the tenant and the token subject (`iss`, `sub`) that opened it. Its session id is useless to anyone else.
+- A session is bound to the tenant, the token subject (`iss`, `sub`), and the OAuth client (`azp` or `client_id`) that opened it. Its session id is useless to anyone else, including another client of the same subject.
+- A tenant can list the OAuth clients it trusts (`allowedClients`). Then a token issued to any other client is refused.
 - A parked fill belongs to one tenant and one subject. It is stored in the tenant's directory under the tenant's derived key. Another tenant cannot list, see, or redeem it, before or after a restart, and another subject of the same tenant cannot claim it after its session ends.
 - The shared bearer token survives only as a development mode (`SBM_DEV_SHARED_TOKEN`), off unless set, which logs a warning.
 
@@ -71,6 +72,7 @@ What does not change:
 - The broker process holds plaintext during every fill, for every tenant. Tenants share one process: a compromise of the broker, or of anyone who can read its memory, exposes every tenant's fills in progress. Run separate deployments for tenants that must not share a process.
 - With Browserbase, Browserbase holds plaintext in the browser for the life of the session.
 - The authorization server is trusted for what it issues. A tenant whose authorization server is compromised, or that issues tokens with the broker's audience to the wrong subjects, exposes that tenant's secrets up to what its Turnkey policy and approvals allow. Approvals stay in Turnkey policy; the broker's scopes do not replace them.
+- Client trust. Without `allowedClients`, the broker trusts every client that the tenant's authorization server issues tokens to, including clients registered with dynamic client registration. If the authorization server lets any client register and get tokens for the broker's audience and the `sbm:*` scopes, any such client can act for a user who approves it. A parked fill belongs to the subject, not the client, so another trusted client of the same subject can claim it after its session ends.
 - `SBM_STATE_KEY` derives every tenant's state key. Anyone with the state volume and that key can decrypt every tenant's parked fills.
 - A token is a bearer token: anyone who steals an unexpired one can use it until it expires. The broker refuses tokens that live longer than 24 hours, so a stolen token works for one day at most. The broker does not support sender-constrained tokens (DPoP) yet.
 

@@ -171,3 +171,19 @@ test("mock secrets take string static properties", () => {
     }),
   ).toThrow(/staticProperties/);
 });
+
+test("allowedClients is an optional, non-empty list of client ids", () => {
+  const [t] = parseTenants({
+    tenants: [
+      { id: "acme", backend: "mock", issuers, allowedClients: ["agent-app"] },
+    ],
+  });
+  expect(t?.allowedClients).toEqual(["agent-app"]);
+  for (const allowedClients of [[], [""], "agent-app"]) {
+    expect(() =>
+      parseTenants({
+        tenants: [{ id: "acme", backend: "mock", issuers, allowedClients }],
+      }),
+    ).toThrow(/allowedClients/);
+  }
+});

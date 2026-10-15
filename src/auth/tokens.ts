@@ -25,7 +25,10 @@
  *    token, which tells the client who signed in and is not an access
  *    token. This check does not depend on `typ`, since Entra ID and others
  *    send `typ: JWT` on access tokens too;
- *  - it names a subject (`sub`).
+ *  - it names a subject (`sub`);
+ *  - for a tenant with `allowedClients`, its client (`azp`, else
+ *    `client_id`) is in that list. Without the list, every client the
+ *    authorization server issues tokens to is trusted.
  *
  * Any failure, including a JWKS that cannot be fetched, rejects the token.
  * The token itself goes nowhere: not to Turnkey, not to Browserbase, not to
@@ -52,8 +55,23 @@ const ALGORITHMS = ["RS256", "PS256", "ES256", "ES384", "EdDSA"];
 export type Principal = {
   issuer: string;
   subject: string;
+  /** The OAuth client the token was issued to (`azp`, else `client_id`),
+   * when the token names one. */
+  client?: string;
   scopes: Set<string>;
 };
+
+/** The client a token was issued to. OpenID Connect and Keycloak use
+ * `azp`; RFC 9068 uses `client_id`. */
+function tokenClient(payload: {
+  azp?: unknown;
+  client_id?: unknown;
+}): string | undefined {
+  for (const claim of [payload.azp, payload.client_id]) {
+    if (typeof claim === "string" && claim !== "") return claim;
+  }
+  return undefined;
+}
 
 export class InvalidTokenError extends Error {
   override name = "InvalidTokenError";
@@ -94,7 +112,11 @@ export class JwksCache {
 
 export async function verifyAccessToken(
   token: string,
-  expect: { audience: string; issuers: TrustedIssuer[] },
+  expect: {
+    audience: string;
+    issuers: TrustedIssuer[];
+    allowedClients?: readonly string[];
+  },
   jwks: JwksCache,
 ): Promise<Principal> {
   // Pick the key set by the unverified issuer, then verify that exact
@@ -146,9 +168,17 @@ export async function verifyAccessToken(
   ) {
     throw new InvalidTokenError("Token lifetime is too long");
   }
+  const client = tokenClient(payload);
+  if (
+    expect.allowedClients &&
+    (client === undefined || !expect.allowedClients.includes(client))
+  ) {
+    throw new InvalidTokenError("Token client is not allowed");
+  }
   return {
     issuer: trusted.issuer,
     subject: payload.sub,
+    ...(client !== undefined ? { client } : {}),
     scopes: parseScopes(payload),
   };
 }

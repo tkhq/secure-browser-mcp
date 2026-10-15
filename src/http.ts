@@ -15,7 +15,7 @@
  *
  * Sessions. Each MCP session gets its own ToolContext (its own browser,
  * redaction registry, and view of the pending fills) and is bound to the
- * tenant and token subject that opened it. Closing the session (DELETE,
+ * tenant, token subject, and OAuth client that opened it. Closing the session (DELETE,
  * idle timeout, or shutdown) closes its browser. Two requests in flight in
  * one session cannot share a JSON-RPC id (src/inflight.ts).
  *
@@ -120,6 +120,8 @@ const SCOPE_BY_TOOL = new Map(TOOLS.map((t) => [t.name, t.scope]));
 type Caller = {
   /** Stable id for session and pending-fill binding. */
   principal: string;
+  /** The OAuth client the token was issued to, if it names one. */
+  client?: string;
   scopes: ReadonlySet<string>;
 };
 
@@ -148,6 +150,7 @@ type Session = {
   lastSeen: number;
   endpoint: string;
   principal: string;
+  client: string | undefined;
   /** JSON-RPC request ids in flight; see src/inflight.ts. */
   inFlight: InFlightIds;
 };
@@ -256,13 +259,22 @@ function tenantEndpoint(
       try {
         const p = await verifyAccessToken(
           bearer.token,
-          { audience, issuers: tenant.issuers },
+          {
+            audience,
+            issuers: tenant.issuers,
+            ...(tenant.allowedClients
+              ? { allowedClients: tenant.allowedClients }
+              : {}),
+          },
           jwks,
         );
         return {
           ok: true,
           caller: {
+            // The principal is (iss, sub) without the client, so a parked
+            // fill can be claimed by the same subject from another client.
             principal: JSON.stringify([p.issuer, p.subject]),
+            ...(p.client !== undefined ? { client: p.client } : {}),
             scopes: p.scopes,
           },
         };
@@ -579,6 +591,7 @@ async function main(): Promise<void> {
           lastSeen: Date.now(),
           endpoint: endpoint.id,
           principal: caller.principal,
+          client: caller.client,
           inFlight,
         });
       },
@@ -647,13 +660,15 @@ async function main(): Promise<void> {
     const sessionId = req.headers["mcp-session-id"];
     if (typeof sessionId === "string") {
       const s = sessions.get(sessionId);
-      // A session belongs to the endpoint and caller that opened it; to
-      // anyone else it does not exist. 404 tells the client to start a new
-      // session (MCP spec), which is also what happens after a restart.
+      // A session belongs to the endpoint, caller, and OAuth client that
+      // opened it; to anyone else it does not exist. 404 tells the client
+      // to start a new session (MCP spec), which is also what happens
+      // after a restart.
       if (
         !s ||
         s.endpoint !== endpoint.id ||
-        s.principal !== caller.principal
+        s.principal !== caller.principal ||
+        s.client !== caller.client
       ) {
         return rpcError(res, 404, "Session not found");
       }
