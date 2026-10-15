@@ -75,8 +75,9 @@ async function startBroker() {
       SBM_HTTP_PORT: String(port),
       SBM_STATE_DIR: stateDir,
       SBM_STATE_KEY: stateKey,
-      // Five tenants, four slots each by default.
-      SBM_MAX_SESSIONS: "20",
+      // Five tenants, five slots each by default, and four for each
+      // principal (the default cap).
+      SBM_MAX_SESSIONS: "25",
       SBM_ALLOWED_ORIGINS: ALLOWED_ORIGIN,
       SBM_MOCK_CONSENSUS: "demo-login-password",
       SBM_MOCK_CONSENSUS_DELAY_MS: "2000",
@@ -789,17 +790,31 @@ test("a request id in flight cannot be reused in the session", async () => {
   expect(note.status).toBe(202);
 }, 30_000);
 
-test("one tenant cannot take every session slot", async () => {
-  // 20 slots and 5 tenants: beta gets at most 4, and alpha still gets in.
-  const betaToken = await token(asB, "beta", { sub: "greedy" });
-  let opened = 0;
-  let res: Response;
-  while ((res = await rpc("beta", betaToken, initialize)).status === 200) {
-    opened++;
-    expect(opened).toBeLessThanOrEqual(4);
-  }
-  expect(res.status).toBe(503);
-  expect(await res.text()).toContain("tenant is at its session limit");
+test("one principal or tenant cannot take every session slot", async () => {
+  /** Open sessions until refused; returns how many opened, and the
+   * refusal. */
+  const fill = async (bearer: string) => {
+    let opened = 0;
+    let res: Response;
+    while ((res = await rpc("beta", bearer, initialize)).status === 200) {
+      opened++;
+      expect(opened).toBeLessThanOrEqual(5);
+    }
+    expect(res.status).toBe(503);
+    return { opened, refusal: await res.text() };
+  };
+
+  // 25 slots and 5 tenants: beta gets at most 5, and one principal at most
+  // 4 of them. An earlier test may still hold a beta session.
+  const greedy = await fill(await token(asB, "beta", { sub: "greedy" }));
+  expect(greedy.opened).toBe(4);
+  expect(greedy.refusal).toContain("caller is at its session limit");
+  // A principal is (iss, sub): the same subject from another issuer that
+  // beta trusts is another principal.
+  const next = await fill(await token(asA, "beta", { sub: "greedy" }));
+  expect(next.opened).toBeLessThanOrEqual(1);
+  expect(next.refusal).toContain("tenant is at its session limit");
+
   expect(
     (await rpc("alpha", await token(asA, "alpha"), initialize)).status,
   ).toBe(200);

@@ -38,6 +38,10 @@
  *   SBM_MAX_SESSIONS_PER_TENANT
  *                       concurrent sessions per tenant (default: an equal
  *                       share of SBM_MAX_SESSIONS)
+ *   SBM_MAX_SESSIONS_PER_PRINCIPAL
+ *                       concurrent sessions per principal (iss, sub) in a
+ *                       tenant (default: 4, or the per-tenant cap if lower).
+ *                       Not applied to the dev /mcp endpoint.
  *   SBM_SESSION_IDLE_S  close sessions idle this long (default 1800)
  *   SBM_ALLOWED_ORIGINS comma-separated origins (https://app.example.com)
  *                       that browser clients may call the MCP endpoints
@@ -556,6 +560,11 @@ async function main(): Promise<void> {
     "SBM_MAX_SESSIONS_PER_TENANT",
     Math.max(1, Math.floor(maxSessions / endpoints)),
   );
+  // And one principal cannot take all of its tenant's slots.
+  const maxPerPrincipal = envInt(
+    "SBM_MAX_SESSIONS_PER_PRINCIPAL",
+    Math.min(4, maxPerTenant),
+  );
 
   const sessions = new Map<string, Session>();
   const isLive = (owner: string) => sessions.has(owner);
@@ -712,8 +721,16 @@ async function main(): Promise<void> {
     }
     const tenantSessions = [...sessions.values()].filter(
       (s) => s.endpoint === endpoint.id,
+    );
+    // The dev endpoint has one principal, the shared token, so only the
+    // per-tenant cap applies to it.
+    const callerSessions = tenantSessions.filter(
+      (s) => s.principal === caller.principal,
     ).length;
-    if (tenantSessions >= maxPerTenant) {
+    if (endpoint !== dev && callerSessions >= maxPerPrincipal) {
+      return rpcError(res, 503, "This caller is at its session limit");
+    }
+    if (tenantSessions.length >= maxPerTenant) {
       return rpcError(res, 503, "This tenant is at its session limit");
     }
     const transport = await openSession(endpoint, caller);
