@@ -373,7 +373,11 @@ test("a token without any sbm scope cannot open a session", async () => {
     expect(res.status).toBe(403);
     const challenge = res.headers.get("www-authenticate")!;
     expect(challenge).toContain('error="insufficient_scope"');
-    // Only the scope a session needs first, not every scope.
+    // Any sbm scope opens a session; the challenge asks for the one a
+    // session needs first, not every scope.
+    expect(challenge).toContain(
+      'error_description="Opening a session needs at least one sbm:* scope"',
+    );
     expect(challenge).toContain('scope="sbm:browse"');
     expect(challenge).toContain(`resource_metadata="${prmUrl("alpha")}"`);
     expect(res.headers.get("mcp-session-id")).toBeNull();

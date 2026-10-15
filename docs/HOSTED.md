@@ -106,7 +106,7 @@ SBM_DEV_SHARED_TOKEN=1 SBM_HTTP_TOKEN="$(openssl rand -hex 32)" bun run serve
 
 Give each tenant its own API key, scoped by Turnkey policy to its own organization: the broker keeps tenants apart by never using one tenant's key for another, and Turnkey policy is what stops a key from reaching further. Approvals stay in Turnkey policy, as with the stdio broker.
 
-The broker reads the file once at startup. Restart it to add or change a tenant.
+The broker reads the file once at startup. Restart it to add or change a tenant. The broker also resolves every tenant's API key at startup, so one missing or unreadable key stops the whole broker, and no tenant is served. To rotate a tenant's API key, update the key and restart the broker.
 
 ### Set up the tenant's authorization server
 
@@ -158,7 +158,7 @@ The broker caches each JWKS for 10 minutes and fetches it again when a token nam
 | `sbm:fill`   | `fill_secret`, `await_fill`                                           |
 | `sbm:refs`   | `list_secret_refs`                                                    |
 
-Opening a session needs a valid token with at least one of these scopes; a token with none gets `403 insufficient_scope` with `scope="sbm:browse"`. Listing tools needs nothing more. An agent that fills secrets needs all three scopes. The broker checks scopes on every request against the token sent with it, so a client that steps up its token gets the new scopes in the same session.
+Opening a session needs a valid token with at least one of these scopes, any one of them. A token with none gets `403 insufficient_scope`. The challenge names `scope="sbm:browse"` only, because every useful session drives the browser; the client asks for the other scopes when a tool call needs them. Listing tools needs nothing more. An agent that fills secrets needs all three scopes. The broker checks scopes on every request against the token sent with it, so a client that steps up its token gets the new scopes in the same session.
 
 **Errors.**
 

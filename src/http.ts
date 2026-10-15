@@ -741,13 +741,14 @@ async function main(): Promise<void> {
       return rpcError(res, 400, "Missing mcp-session-id");
     }
     // A session holds a browser, so opening one needs a token that can use
-    // at least one tool. The challenge names sbm:browse alone: every useful
-    // session drives the browser, and the client asks for fill and refs
-    // when a tool call needs them.
+    // at least one tool: any sbm:* scope will do (the browser starts only
+    // when a tool needs it). The challenge names sbm:browse alone: every
+    // useful session drives the browser, and the client asks for fill and
+    // refs when a tool call needs them.
     if (!SCOPES.some((s) => caller.scopes.has(s))) {
       return refuse(res, 403, endpoint, {
         error: "insufficient_scope",
-        description: "Opening a session requires sbm:browse",
+        description: "Opening a session needs at least one sbm:* scope",
         scopes: ["sbm:browse"],
       });
     }
