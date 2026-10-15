@@ -19,7 +19,11 @@ RUN bun install --frozen-lockfile --production
 COPY src ./src
 COPY tsconfig.json ./
 
-ENV SBM_BROWSER=browserbase \
+# Tenants and their OAuth issuers come from a mounted file (docs/HOSTED.md,
+# "Tenants"); SBM_PUBLIC_URL must also be set at run time. The development
+# shared token (SBM_DEV_SHARED_TOKEN) is off in this image.
+ENV SBM_TENANTS=/etc/sbm/tenants.json \
+    SBM_BROWSER=browserbase \
     SBM_CHROME_PATH=/usr/bin/chromium \
     SBM_CHROME_ARGS=--disable-dev-shm-usage \
     SBM_HEADLESS=true \
