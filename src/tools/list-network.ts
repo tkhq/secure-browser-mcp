@@ -2,6 +2,7 @@ import { defineTool, NotImplementedError } from "./tool.js";
 
 export const listNetwork = defineTool({
   name: "list_network_requests",
+  scope: "sbm:browse",
   description:
     "List network requests made by the current page (method, URL, status). " +
     "Request bodies are withheld for origins with live secrets.",

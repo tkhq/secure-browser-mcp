@@ -25,6 +25,7 @@ export function selectRefs(
 
 export const listSecretRefs = defineTool({
   name: "list_secret_refs",
+  scope: "sbm:refs",
   description:
     "Report the active backend (mock or turnkey) and list the secrets available to fill, as opaque references: id, name, and " +
     "destination binding (origin/url pattern/selector). Pass origin to see only " +
