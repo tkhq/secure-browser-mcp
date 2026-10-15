@@ -25,6 +25,10 @@
  *   SBM_STATE_KEY       32-byte key (hex or base64), required with SBM_STATE_DIR
  *   SBM_MAX_SESSIONS    concurrent agent sessions (default 8)
  *   SBM_SESSION_IDLE_S  close sessions idle this long (default 1800)
+ *   SBM_ALLOWED_ORIGINS comma-separated origins (https://app.example.com)
+ *                       that browser clients may call from. Default empty: a
+ *                       request with any Origin header gets 403. Requests
+ *                       without Origin (non-browser clients) are allowed.
  * plus the TURNKEY_* and SBM_* variables the stdio broker reads.
  */
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
@@ -89,6 +93,51 @@ function makeStore(): MemoryPendingFillStore {
   const key = process.env["SBM_STATE_KEY"];
   if (!key) throw new Error("SBM_STATE_DIR requires SBM_STATE_KEY");
   return new FilePendingFillStore(dir, parseStateKey(key));
+}
+
+/**
+ * Parse SBM_ALLOWED_ORIGINS into serialized origins. Each entry must be a
+ * bare origin (scheme, host, optional port); anything else stops startup,
+ * so a typo cannot silently allow or refuse a client.
+ */
+function parseAllowedOrigins(raw: string | undefined): Set<string> {
+  const origins = new Set<string>();
+  for (const item of (raw ?? "").split(",")) {
+    const entry = item.trim();
+    if (entry === "") continue;
+    let url: URL | undefined;
+    try {
+      url = new URL(entry);
+    } catch {}
+    if (
+      !url ||
+      url.origin === "null" ||
+      url.pathname !== "/" ||
+      url.search !== "" ||
+      url.hash !== "" ||
+      url.username !== "" ||
+      url.password !== ""
+    ) {
+      throw new Error(
+        `SBM_ALLOWED_ORIGINS: "${entry}" is not an origin ` +
+          "(expected scheme://host[:port])",
+      );
+    }
+    origins.add(url.origin);
+  }
+  return origins;
+}
+
+/**
+ * Origin check (MCP Streamable HTTP: servers MUST validate Origin, to stop
+ * DNS rebinding and cross-site calls from a browser). A request without
+ * Origin is not from a browser page and passes. A present Origin must match
+ * an allowed origin exactly, as the browser serializes it; "null" and
+ * malformed values never match.
+ */
+function originAllowed(req: IncomingMessage, allowed: Set<string>): boolean {
+  const origin = req.headers.origin;
+  return origin === undefined || allowed.has(origin);
 }
 
 /** Constant-time bearer check; compares digests so lengths do not leak. */
@@ -178,6 +227,9 @@ async function main(): Promise<void> {
   const port = envInt("SBM_HTTP_PORT", 8080);
   const maxSessions = envInt("SBM_MAX_SESSIONS", 8);
   const idleMs = envInt("SBM_SESSION_IDLE_S", 1800) * 1_000;
+  const allowedOrigins = parseAllowedOrigins(
+    process.env["SBM_ALLOWED_ORIGINS"],
+  );
 
   const broker = makeBroker();
   const store = makeStore();
@@ -256,6 +308,10 @@ async function main(): Promise<void> {
       });
     }
     if (path !== "/mcp") return send(res, 404, { error: "not found" });
+    // Before auth and before any session work.
+    if (!originAllowed(req, allowedOrigins)) {
+      return rpcError(res, 403, "Origin not allowed");
+    }
     if (!authorized(req, token)) {
       return send(
         res,

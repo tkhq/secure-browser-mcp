@@ -50,6 +50,7 @@ async function startBroker(): Promise<BrokerProcess> {
       SBM_STATE_KEY: stateKey,
       SBM_MOCK_CONSENSUS: "demo-login-password,demo-card",
       SBM_MOCK_CONSENSUS_DELAY_MS: "2000",
+      SBM_ALLOWED_ORIGINS: "https://allowed.example, http://localhost:3000",
     },
   });
   let log = "";
@@ -138,6 +139,84 @@ test("requests without the bearer token are refused", async () => {
     body: "{}",
   });
   expect(wrong.status).toBe(401);
+});
+
+function initializeRequest(headers: Record<string, string>): RequestInit {
+  return {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      ...headers,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "origin-test", version: "0" },
+      },
+    }),
+  };
+}
+
+/** Initialize over raw HTTP, then DELETE the session it opened. */
+async function initializeAndClose(headers: Record<string, string>) {
+  const res = await fetch(url, initializeRequest(headers));
+  const sessionId = res.headers.get("mcp-session-id");
+  await res.text();
+  if (sessionId) {
+    await fetch(url, {
+      method: "DELETE",
+      headers: { ...headers, "mcp-session-id": sessionId },
+    });
+  }
+  return { status: res.status, sessionId };
+}
+
+test("a request from a disallowed Origin gets 403 before auth", async () => {
+  const auth = { authorization: `Bearer ${TOKEN}` };
+  for (const origin of [
+    "https://evil.example",
+    "null",
+    "https://allowed.example.evil.example",
+    "http://allowed.example", // scheme differs
+    "http://localhost:4000", // port differs
+  ]) {
+    const res = await fetch(url, initializeRequest({ ...auth, origin }));
+    expect(res.status).toBe(403);
+    expect(res.headers.get("mcp-session-id")).toBeNull();
+    expect(((await res.json()) as any).error.message).toBe(
+      "Origin not allowed",
+    );
+  }
+  // No token either: the Origin check answers first.
+  const noAuth = await fetch(
+    url,
+    initializeRequest({ origin: "https://evil.example" }),
+  );
+  expect(noAuth.status).toBe(403);
+});
+
+test("allowed Origins and requests without Origin are served", async () => {
+  const auth = { authorization: `Bearer ${TOKEN}` };
+  for (const headers of [
+    auth,
+    { ...auth, origin: "https://allowed.example" },
+    { ...auth, origin: "http://localhost:3000" },
+  ]) {
+    const { status, sessionId } = await initializeAndClose(headers);
+    expect(status).toBe(200);
+    expect(sessionId).toBeString();
+  }
+  // An allowed Origin does not replace the bearer token.
+  const res = await fetch(
+    url,
+    initializeRequest({ origin: "https://allowed.example" }),
+  );
+  expect(res.status).toBe(401);
 });
 
 /** A 2026-07-28 request: no session, `_meta` envelope on the request. */
