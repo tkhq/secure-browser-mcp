@@ -4,12 +4,14 @@
  */
 import { existsSync } from "node:fs";
 
+import { resolveApiKey, type TenantConfig } from "./auth/tenants.js";
 import { BindingPolicy } from "./broker/binding.js";
 import { MockSecretsClient } from "./broker/mock-secrets.js";
 import type { PendingFills } from "./broker/pending-store.js";
 import type { SecretsClient } from "./broker/secrets-client.js";
 import {
   dashboardActivityUrl,
+  turnkeyClient,
   turnkeyClientFromEnv,
 } from "./broker/turnkey-env.js";
 import { TurnkeySecretsClient } from "./broker/turnkey-secrets.js";
@@ -26,23 +28,43 @@ import type { ToolContext } from "./tools/tool.js";
 // SBM_MOCK_CONSENSUS (comma-separated secret names) makes those mock secrets
 // consensus-gated, with approval arriving SBM_MOCK_CONSENSUS_DELAY_MS after
 // the first export attempt — enough to exercise the pending → await flow.
-export function makeSecretsClient(): {
+export type Secrets = {
   client: SecretsClient;
   backend: "mock" | "turnkey";
-} {
+};
+
+export function makeSecretsClient(): Secrets {
   const apiClient = turnkeyClientFromEnv();
   if (apiClient) {
     return { client: new TurnkeySecretsClient(apiClient), backend: "turnkey" };
   }
+  return { client: mockFromEnv(), backend: "mock" };
+}
+
+function mockFromEnv(seed?: TenantMockSeed): MockSecretsClient {
   const consensus = process.env["SBM_MOCK_CONSENSUS"];
   const delay = Number(process.env["SBM_MOCK_CONSENSUS_DELAY_MS"] ?? "3000");
-  const client = new MockSecretsClient(
-    undefined,
+  return new MockSecretsClient(
+    seed,
     consensus
       ? { consensusNames: consensus.split(","), approvalDelayMs: delay }
       : {},
   );
-  return { client, backend: "mock" };
+}
+
+type TenantMockSeed = Extract<TenantConfig, { backend: "mock" }>["mockSecrets"];
+
+/** The secrets a hosted tenant's sessions see: its own Turnkey
+ * organization, through its own API key. */
+export function tenantSecretsClient(tenant: TenantConfig): Secrets {
+  if (tenant.backend === "mock") {
+    return { client: mockFromEnv(tenant.mockSecrets), backend: "mock" };
+  }
+  const apiClient = turnkeyClient({
+    ...resolveApiKey(tenant),
+    organizationId: tenant.organizationId,
+  });
+  return { client: new TurnkeySecretsClient(apiClient), backend: "turnkey" };
 }
 
 const CHROME_CANDIDATES = [
@@ -116,8 +138,10 @@ function browserHostFromEnv(): Pick<Broker, "browserHost" | "browser"> {
   };
 }
 
-export function makeBroker(): Broker {
-  const { client, backend } = makeSecretsClient();
+/** A broker over `secrets`, by default the TURNKEY_* key (or the mock). */
+export function makeBroker(
+  { client, backend }: Secrets = makeSecretsClient(),
+): Broker {
   return {
     secrets: client,
     backend,

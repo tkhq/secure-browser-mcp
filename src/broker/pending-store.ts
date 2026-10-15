@@ -12,17 +12,25 @@
  *    hosted broker can restart without stranding an approval. The key comes
  *    from the deployment (SBM_STATE_KEY), never from the state directory.
  *
- * Every fill has an owner: the agent session that parked it. Tools only see
- * their own session's fills through `scopedFills`. A fill whose owner
- * session no longer exists (the broker restarted, or the client
- * reconnected) can be claimed by the session that presents its fill_id.
- * The fill_id is a random UUID the broker gave only to the original
- * session, so presenting it is the proof of ownership.
+ * Every fill has an owner, the agent session that parked it, and a
+ * principal, the caller that session speaks for (in the hosted broker, a
+ * token's issuer and subject). Tools only see their own session's fills
+ * through `scopedFills`. A fill whose owner session no longer exists (the
+ * broker restarted, or the client reconnected) can be claimed by another
+ * session of the same principal that presents its fill_id. The fill_id is a
+ * random UUID the broker gave only to the original session, so presenting
+ * it is the proof of ownership; the principal check keeps a leaked id from
+ * working for anyone else.
+ *
+ * The hosted broker keeps one store per tenant, each in its own directory
+ * under its own key (`tenantStateKey`), so no tenant's session can reach
+ * another tenant's fills.
  */
 import {
   createCipheriv,
   createDecipheriv,
   createHash,
+  hkdfSync,
   randomBytes,
 } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync } from "node:fs";
@@ -46,7 +54,12 @@ export type PendingFill = {
   createdAt: number;
 };
 
-export type StoredFill = PendingFill & { owner: string };
+export type StoredFill = PendingFill & {
+  /** Session that parked the fill, or that last claimed it. */
+  owner: string;
+  /** Who the owning session acts for. Never changes. */
+  principal: string;
+};
 
 /** Parked fills older than this are dropped. Turnkey activities do not
  * wait forever either. */
@@ -64,17 +77,19 @@ export class MemoryPendingFillStore {
 
   /**
    * The fill, if `owner` may use it: it owns it, or the owning session is
-   * gone and the fill moves to `owner`. Checked and moved synchronously, so
-   * two sessions cannot both claim one orphan.
+   * gone, `principal` is the fill's principal, and the fill moves to
+   * `owner`. Checked and moved synchronously, so two sessions cannot both
+   * claim one orphan.
    */
   async claim(
     fillId: string,
     owner: string,
+    principal: string,
     isLive: (owner: string) => boolean,
   ): Promise<StoredFill | undefined> {
     this.expire();
     const fill = this.fills.get(fillId);
-    if (!fill) return undefined;
+    if (!fill || fill.principal !== principal) return undefined;
     if (fill.owner === owner) return fill;
     if (isLive(fill.owner)) return undefined;
     const claimed = { ...fill, owner };
@@ -188,6 +203,23 @@ export function parseStateKey(value: string): Buffer {
   return key;
 }
 
+/**
+ * A tenant's state key: HKDF-SHA256 of SBM_STATE_KEY with the tenant id as
+ * context. Keys for different tenants are independent, so one tenant's
+ * files do not decrypt under another tenant's key.
+ */
+export function tenantStateKey(master: Buffer, tenantId: string): Buffer {
+  return Buffer.from(
+    hkdfSync(
+      "sha256",
+      master,
+      "secure-browser-mcp pending fills",
+      `tenant:${tenantId}`,
+      32,
+    ),
+  );
+}
+
 /** One agent session's view of the store. */
 export type PendingFills = {
   list(): PendingFill[];
@@ -198,15 +230,20 @@ export type PendingFills = {
 
 export function scopedFills(
   store: MemoryPendingFillStore,
-  owner: string,
-  isLive: (owner: string) => boolean = () => true,
+  session: {
+    owner: string;
+    principal: string;
+    isLive?: (owner: string) => boolean;
+  },
 ): PendingFills {
+  const { owner, principal, isLive = () => true } = session;
   return {
     list: () => store.list(owner),
-    get: (fillId) => store.claim(fillId, owner, isLive),
-    put: (fill) => store.put({ ...fill, owner }),
+    get: (fillId) => store.claim(fillId, owner, principal, isLive),
+    put: (fill) => store.put({ ...fill, owner, principal }),
     delete: async (fillId) => {
-      if (await store.claim(fillId, owner, isLive)) await store.delete(fillId);
+      if (await store.claim(fillId, owner, principal, isLive))
+        await store.delete(fillId);
     },
   };
 }

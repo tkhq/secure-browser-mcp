@@ -10,7 +10,10 @@ async function main(): Promise<void> {
   // with the process. The hosted entrypoint (src/http.ts) persists them.
   const ctx = sessionContext(
     broker,
-    scopedFills(new MemoryPendingFillStore(), "stdio"),
+    scopedFills(new MemoryPendingFillStore(), {
+      owner: "stdio",
+      principal: "stdio",
+    }),
   );
 
   const server = createServer(ctx);

@@ -8,16 +8,26 @@ import { Turnkey, type TurnkeyApiClient } from "@turnkey/sdk-server";
 export function turnkeyClientFromEnv(): TurnkeyApiClient | undefined {
   const apiPrivateKey = process.env["TURNKEY_API_PRIVATE_KEY"];
   const apiPublicKey = process.env["TURNKEY_API_PUBLIC_KEY"];
-  const defaultOrganizationId = process.env["TURNKEY_ORGANIZATION_ID"];
-  if (!apiPrivateKey || !apiPublicKey || !defaultOrganizationId) {
+  const organizationId = process.env["TURNKEY_ORGANIZATION_ID"];
+  if (!apiPrivateKey || !apiPublicKey || !organizationId) {
     return undefined;
   }
+  return turnkeyClient({ apiPrivateKey, apiPublicKey, organizationId });
+}
+
+/** A Turnkey API client for one organization, against TURNKEY_API_BASE_URL.
+ * The hosted broker builds one per tenant. */
+export function turnkeyClient(key: {
+  apiPublicKey: string;
+  apiPrivateKey: string;
+  organizationId: string;
+}): TurnkeyApiClient {
   return new Turnkey({
     apiBaseUrl:
       process.env["TURNKEY_API_BASE_URL"] ?? "https://api.turnkey.com",
-    apiPrivateKey,
-    apiPublicKey,
-    defaultOrganizationId,
+    apiPrivateKey: key.apiPrivateKey,
+    apiPublicKey: key.apiPublicKey,
+    defaultOrganizationId: key.organizationId,
   }).apiClient();
 }
 
