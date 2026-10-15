@@ -137,6 +137,8 @@ The metadata document lists `resource`, `authorization_servers`, `scopes_support
 - `aud` is exactly the tenant's resource URI, or the tenant's `audience` if it has one (a single audience; a token that also names other audiences is refused),
 - the header has `typ: at+jwt`, if the issuer has `requireTyp`,
 - `exp` is present and not past, and `nbf`, if present, is not in the future, each with 30 seconds of clock skew,
+- `exp` is at most 24 hours after now, and at most 24 hours after `iat` if the token has one,
+- there is no `nonce` or `at_hash` claim. These claims mark an OpenID Connect ID token, and an ID token is not an access token. The broker does not use `typ` for this check, because Entra ID and other servers send `typ: JWT` on access tokens too,
 - `sub` is present.
 
 The broker reads scopes from `scope` (a space-separated string, as RFC 9068 says) and from `scp` (a string or an array of strings, as Okta issues). If a token has both, the broker uses all of them.

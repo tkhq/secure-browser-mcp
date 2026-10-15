@@ -18,6 +18,13 @@
  *  - for an issuer with `requireTyp`, its header has `typ: at+jwt`;
  *  - `exp` is present and in the future, and `nbf`, when present, is in the
  *    past, both with CLOCK_SKEW_S of tolerance;
+ *  - `exp` is at most MAX_TOKEN_LIFETIME_S (24 hours) after now, and at
+ *    most that long after `iat` when the token has one. A stolen token
+ *    then works for a day at most;
+ *  - it has no `nonce` or `at_hash` claim. Those mark an OpenID Connect ID
+ *    token, which tells the client who signed in and is not an access
+ *    token. This check does not depend on `typ`, since Entra ID and others
+ *    send `typ: JWT` on access tokens too;
  *  - it names a subject (`sub`).
  *
  * Any failure, including a JWKS that cannot be fetched, rejects the token.
@@ -35,6 +42,9 @@ import { parseScopes } from "./scopes.js";
 import type { TrustedIssuer } from "./tenants.js";
 
 export const CLOCK_SKEW_S = 30;
+
+/** The longest lifetime the broker accepts in a token. */
+export const MAX_TOKEN_LIFETIME_S = 24 * 60 * 60;
 
 const ALGORITHMS = ["RS256", "PS256", "ES256", "ES384", "EdDSA"];
 
@@ -123,6 +133,18 @@ export async function verifyAccessToken(
   }
   if (typeof payload.sub !== "string" || payload.sub === "") {
     throw new InvalidTokenError("Token has no subject");
+  }
+  if ("nonce" in payload || "at_hash" in payload) {
+    throw new InvalidTokenError("Token is an ID token");
+  }
+  // jose has checked that exp (required) and iat (if present) are numbers.
+  const exp = payload.exp!;
+  const now = Math.floor(Date.now() / 1000);
+  if (
+    exp > now + MAX_TOKEN_LIFETIME_S + CLOCK_SKEW_S ||
+    (payload.iat !== undefined && exp - payload.iat > MAX_TOKEN_LIFETIME_S)
+  ) {
+    throw new InvalidTokenError("Token lifetime is too long");
   }
   return {
     issuer: trusted.issuer,

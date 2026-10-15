@@ -3,6 +3,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import {
   InvalidTokenError,
   JwksCache,
+  MAX_TOKEN_LIFETIME_S,
   verifyAccessToken,
 } from "../src/auth/tokens.js";
 import { MockAuthServer } from "./mock-auth-server.js";
@@ -178,4 +179,39 @@ test("fails closed when the JWKS cannot be fetched", async () => {
   } finally {
     as.down = false;
   }
+});
+
+test("rejects ID tokens, whatever their typ", async () => {
+  for (const claims of [{ nonce: "n-1" }, { at_hash: "abc" }]) {
+    for (const typ of ["JWT", "at+jwt", null]) {
+      await rejects(await as.mint({ aud: AUDIENCE, claims, typ }));
+    }
+  }
+});
+
+test("rejects a token that lives longer than 24 hours", async () => {
+  const jwks = new JwksCache();
+  const ok = async (opts: Parameters<MockAuthServer["mint"]>[0]) =>
+    verifyAccessToken(
+      await as.mint({ aud: AUDIENCE, ...opts }),
+      expectFor(),
+      jwks,
+    );
+  const day = MAX_TOKEN_LIFETIME_S;
+
+  // Up to a day from now is fine, with or without iat.
+  await ok({ expiresIn: day });
+  await ok({ expiresIn: day, omitIat: true });
+  // More than a day from now is refused, with or without iat.
+  await rejects(await as.mint({ aud: AUDIENCE, expiresIn: day + 120 }), jwks);
+  await rejects(
+    await as.mint({ aud: AUDIENCE, expiresIn: day + 120, omitIat: true }),
+    jwks,
+  );
+  // A token issued two days ago for three days has a day left, but its
+  // lifetime is three days.
+  await rejects(
+    await as.mint({ aud: AUDIENCE, issuedAt: -2 * day, expiresIn: day - 60 }),
+    jwks,
+  );
 });

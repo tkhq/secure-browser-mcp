@@ -26,6 +26,11 @@ export type MintOptions = {
   expiresIn?: number;
   /** Seconds from now. */
   notBefore?: number;
+  /** `iat`, in seconds from now (default 0). */
+  issuedAt?: number;
+  omitIat?: boolean;
+  /** More claims, such as `nonce` or `azp`. */
+  claims?: Record<string, unknown>;
   /** Override `iss` (for a token claiming another issuer). */
   iss?: string;
   omitExp?: boolean;
@@ -92,7 +97,7 @@ export class MockAuthServer {
 
   private sign(key: Key, opts: MintOptions): Promise<string> {
     const now = Math.floor(Date.now() / 1000);
-    const claims: Record<string, unknown> = {};
+    const claims: Record<string, unknown> = { ...opts.claims };
     if (opts.scope !== undefined) claims["scope"] = opts.scope;
     if (opts.scp !== undefined) claims["scp"] = opts.scp;
     const jwt = new SignJWT(claims)
@@ -102,8 +107,8 @@ export class MockAuthServer {
         ...(opts.typ === null ? {} : { typ: opts.typ ?? "at+jwt" }),
       })
       .setIssuer(opts.iss ?? this.issuer)
-      .setIssuedAt(now)
       .setJti(randomUUID());
+    if (!opts.omitIat) jwt.setIssuedAt(now + (opts.issuedAt ?? 0));
     if (opts.aud !== undefined) jwt.setAudience(opts.aud);
     if (!opts.omitSub) jwt.setSubject(opts.sub ?? "user-1");
     if (!opts.omitExp) jwt.setExpirationTime(now + (opts.expiresIn ?? 300));

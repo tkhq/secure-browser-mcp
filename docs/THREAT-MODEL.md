@@ -72,7 +72,7 @@ What does not change:
 - With Browserbase, Browserbase holds plaintext in the browser for the life of the session.
 - The authorization server is trusted for what it issues. A tenant whose authorization server is compromised, or that issues tokens with the broker's audience to the wrong subjects, exposes that tenant's secrets up to what its Turnkey policy and approvals allow. Approvals stay in Turnkey policy; the broker's scopes do not replace them.
 - `SBM_STATE_KEY` derives every tenant's state key. Anyone with the state volume and that key can decrypt every tenant's parked fills.
-- A token is a bearer token: anyone who steals an unexpired one can use it until it expires. The broker does not support sender-constrained tokens (DPoP) yet.
+- A token is a bearer token: anyone who steals an unexpired one can use it until it expires. The broker refuses tokens that live longer than 24 hours, so a stolen token works for one day at most. The broker does not support sender-constrained tokens (DPoP) yet.
 
 **Parked fills hold key material.** A parked fill contains the ephemeral private key for an export that approvers may still approve. Anyone with both the state volume and `SBM_STATE_KEY` can decrypt that export after approval. The broker encrypts each parked fill with AES-256-GCM under its tenant's key and binds it to its file name, and drops parked fills after 24 hours.
 
