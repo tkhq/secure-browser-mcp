@@ -34,6 +34,7 @@ Keep `SBM_STATE_KEY` stable across restarts. A different key cannot read the par
 | `SBM_MAX_SESSIONS`          | `8`               | Concurrent agent sessions. Each session gets its own browser. On Browserbase, keep this at or below the plan's concurrency limit.                                   |
 | `SBM_SESSION_IDLE_S`        | `1800`            | The broker closes a session, and its browser, after this many idle seconds.                                                                                         |
 | `SBM_CHROME_ARGS`           | (none)            | Local Chrome only. Extra Chrome flags, separated by spaces.                                                                                                         |
+| `SBM_ALLOWED_ORIGINS`       | (none)            | Browser origins that may call `/mcp`, separated by commas. Any other `Origin` header gets `403`. See [Origin check](#origin-check).                                 |
 
 The `TURNKEY_*` variables and the other `SBM_*` variables work as in the stdio broker. Step 1 uses one Turnkey API key for every session.
 
@@ -54,6 +55,48 @@ mcp_servers:
 Check the connection with `hermes mcp test secure-browser`. It must list the same tools as the stdio broker. Install the skill as usual (`bun run skill:install -- --hermes`); the skill does not change.
 
 The hosted browser runs on the broker host. `localhost` in a URL refers to that host, not to the agent's machine, so the local demo fixture works only when the fixture runs beside the broker.
+
+## Origin check
+
+The MCP Streamable HTTP spec requires the server to check the `Origin` header. This stops a web page in a user's browser from calling the broker, for example through DNS rebinding.
+
+- A request without an `Origin` header passes. Non-browser MCP clients (Hermes, Claude Code, the SDK clients) do not send one.
+- A request with an `Origin` header passes only if the value is in `SBM_ALLOWED_ORIGINS`. The match is exact: scheme, host, and port. The browser's opaque origin `null` never matches.
+- The default is empty, so the broker refuses every request that has an `Origin` header.
+- A refused request gets `403` with the JSON-RPC error `Origin not allowed`. The broker sends this before it checks the bearer token and before it opens or finds a session.
+
+Each entry must be a bare origin (`scheme://host[:port]`, no path). The broker does not start if an entry is not an origin.
+
+An allowed origin does not replace the bearer token. The broker does not send CORS headers yet, so a browser page on an allowed origin still cannot read responses.
+
+## Protocol versions
+
+The broker serves the 2025 session protocol, up to MCP revision `2025-11-25`: the client sends `initialize` and then sends the `Mcp-Session-Id` header on each request. This is the default for current MCP clients.
+
+The broker does not serve revision `2026-07-28` yet. That revision has no sessions, and the broker keeps one browser per session. A 2026-07-28 request (for example `server/discover`, with the protocol version in the request's `_meta`) gets HTTP `400` with the JSON-RPC error `-32022` (unsupported protocol version):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "error": {
+    "code": -32022,
+    "message": "Unsupported protocol version: 2026-07-28. This broker serves the 2025-era session protocol only; connect with initialize (protocol version 2025-11-25).",
+    "data": {
+      "supported": [
+        "2025-11-25",
+        "2025-06-18",
+        "2025-03-26",
+        "2024-11-05",
+        "2024-10-07"
+      ],
+      "requested": "2026-07-28"
+    }
+  },
+  "id": 7
+}
+```
+
+A client that negotiates the version (MCP TypeScript SDK v2 `versionNegotiation: { mode: "auto" }`) reads this error and connects with `initialize`. A client that requires 2026-07-28 fails to connect with this error.
 
 ## Sessions
 

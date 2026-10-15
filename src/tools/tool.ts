@@ -1,4 +1,4 @@
-import type { ZodRawShape, objectOutputType, ZodTypeAny } from "zod";
+import type { ZodObject, ZodRawShape, output } from "zod";
 
 import type { BindingPolicy } from "../broker/binding.js";
 import type { PendingFills } from "../broker/pending-store.js";
@@ -37,7 +37,7 @@ export type ToolDef<Shape extends ZodRawShape = ZodRawShape> = {
   inputSchema: Shape;
   handler: (
     ctx: ToolContext,
-    args: objectOutputType<Shape, ZodTypeAny>,
+    args: output<ZodObject<Shape>>,
   ) => Promise<unknown>;
 };
 

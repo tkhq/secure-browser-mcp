@@ -1,4 +1,4 @@
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 
 import { MemoryPendingFillStore, scopedFills } from "./broker/pending-store.js";
 import { makeBroker, sessionContext } from "./runtime.js";

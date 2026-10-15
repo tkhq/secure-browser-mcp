@@ -11,6 +11,11 @@
  * its own fills. Closing the session (DELETE, idle timeout, or shutdown)
  * closes its browser.
  *
+ * Protocol: the 2025-era session protocol (initialize, Mcp-Session-Id),
+ * through to 2025-11-25. A 2026-07-28 request (no session, per-request
+ * `_meta` envelope) gets an UnsupportedProtocolVersion error; see
+ * rejectModern below.
+ *
  * Environment:
  *   SBM_HTTP_TOKEN      required. Clients send `Authorization: Bearer <token>`.
  *   SBM_HTTP_HOST       listen address (default 127.0.0.1; 0.0.0.0 in the image)
@@ -20,6 +25,10 @@
  *   SBM_STATE_KEY       32-byte key (hex or base64), required with SBM_STATE_DIR
  *   SBM_MAX_SESSIONS    concurrent agent sessions (default 8)
  *   SBM_SESSION_IDLE_S  close sessions idle this long (default 1800)
+ *   SBM_ALLOWED_ORIGINS comma-separated origins (https://app.example.com)
+ *                       that browser clients may call from. Default empty: a
+ *                       request with any Origin header gets 403. Requests
+ *                       without Origin (non-browser clients) are allowed.
  * plus the TURNKEY_* and SBM_* variables the stdio broker reads.
  */
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
@@ -29,9 +38,17 @@ import {
   type ServerResponse,
 } from "node:http";
 
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import {
+  NodeStreamableHTTPServerTransport,
+  toWebRequest,
+  type NodeIncomingMessageLike,
+} from "@modelcontextprotocol/node";
+import {
+  isInitializeRequest,
+  isLegacyRequest,
+  PROTOCOL_VERSION_META_KEY,
+  SUPPORTED_PROTOCOL_VERSIONS,
+} from "@modelcontextprotocol/server";
 
 import {
   FilePendingFillStore,
@@ -45,8 +62,11 @@ import type { ToolContext } from "./tools/tool.js";
 
 const MAX_BODY_BYTES = 1_000_000;
 
+/** JSON-RPC code for UnsupportedProtocolVersion (MCP 2026-07-28). */
+const UNSUPPORTED_PROTOCOL_VERSION = -32022;
+
 type Session = {
-  transport: StreamableHTTPServerTransport;
+  transport: NodeStreamableHTTPServerTransport;
   ctx: ToolContext;
   lastSeen: number;
 };
@@ -73,6 +93,51 @@ function makeStore(): MemoryPendingFillStore {
   const key = process.env["SBM_STATE_KEY"];
   if (!key) throw new Error("SBM_STATE_DIR requires SBM_STATE_KEY");
   return new FilePendingFillStore(dir, parseStateKey(key));
+}
+
+/**
+ * Parse SBM_ALLOWED_ORIGINS into serialized origins. Each entry must be a
+ * bare origin (scheme, host, optional port); anything else stops startup,
+ * so a typo cannot silently allow or refuse a client.
+ */
+function parseAllowedOrigins(raw: string | undefined): Set<string> {
+  const origins = new Set<string>();
+  for (const item of (raw ?? "").split(",")) {
+    const entry = item.trim();
+    if (entry === "") continue;
+    let url: URL | undefined;
+    try {
+      url = new URL(entry);
+    } catch {}
+    if (
+      !url ||
+      url.origin === "null" ||
+      url.pathname !== "/" ||
+      url.search !== "" ||
+      url.hash !== "" ||
+      url.username !== "" ||
+      url.password !== ""
+    ) {
+      throw new Error(
+        `SBM_ALLOWED_ORIGINS: "${entry}" is not an origin ` +
+          "(expected scheme://host[:port])",
+      );
+    }
+    origins.add(url.origin);
+  }
+  return origins;
+}
+
+/**
+ * Origin check (MCP Streamable HTTP: servers MUST validate Origin, to stop
+ * DNS rebinding and cross-site calls from a browser). A request without
+ * Origin is not from a browser page and passes. A present Origin must match
+ * an allowed origin exactly, as the browser serializes it; "null" and
+ * malformed values never match.
+ */
+function originAllowed(req: IncomingMessage, allowed: Set<string>): boolean {
+  const origin = req.headers.origin;
+  return origin === undefined || allowed.has(origin);
 }
 
 /** Constant-time bearer check; compares digests so lengths do not leak. */
@@ -113,6 +178,48 @@ function rpcError(res: ServerResponse, status: number, message: string) {
   });
 }
 
+/**
+ * Answer a 2026-07-28 (stateless, `server/discover`) request. The broker
+ * serves only the 2025-era session protocol: one browser per
+ * `Mcp-Session-Id`. The 2026 revision has no sessions, so it needs a
+ * different browser-handle model, which is not built yet.
+ *
+ * The answer is the spec's UnsupportedProtocolVersion error, listing the
+ * 2025-era versions the broker serves. A client in version-negotiation
+ * `auto` mode reads this and falls back to `initialize`; a client pinned to
+ * 2026-07-28 fails with a clear error instead of hanging.
+ */
+function rejectModern(
+  res: ServerResponse,
+  req: IncomingMessage,
+  body: unknown,
+) {
+  const msg = (Array.isArray(body) ? body[0] : body) as
+    { id?: unknown; params?: { _meta?: Record<string, unknown> } } | undefined;
+  const claimed = msg?.params?._meta?.[PROTOCOL_VERSION_META_KEY];
+  const header = req.headers["mcp-protocol-version"];
+  const requested =
+    typeof claimed === "string"
+      ? claimed
+      : typeof header === "string"
+        ? header
+        : "unknown";
+  const id =
+    typeof msg?.id === "string" || typeof msg?.id === "number" ? msg.id : null;
+  send(res, 400, {
+    jsonrpc: "2.0",
+    error: {
+      code: UNSUPPORTED_PROTOCOL_VERSION,
+      message:
+        `Unsupported protocol version: ${requested}. This broker serves ` +
+        "the 2025-era session protocol only; connect with initialize " +
+        `(protocol version ${SUPPORTED_PROTOCOL_VERSIONS[0]}).`,
+      data: { supported: [...SUPPORTED_PROTOCOL_VERSIONS], requested },
+    },
+    id,
+  });
+}
+
 async function main(): Promise<void> {
   const token = process.env["SBM_HTTP_TOKEN"];
   if (!token) throw new Error("SBM_HTTP_TOKEN is required");
@@ -120,6 +227,9 @@ async function main(): Promise<void> {
   const port = envInt("SBM_HTTP_PORT", 8080);
   const maxSessions = envInt("SBM_MAX_SESSIONS", 8);
   const idleMs = envInt("SBM_SESSION_IDLE_S", 1800) * 1_000;
+  const allowedOrigins = parseAllowedOrigins(
+    process.env["SBM_ALLOWED_ORIGINS"],
+  );
 
   const broker = makeBroker();
   const store = makeStore();
@@ -134,27 +244,40 @@ async function main(): Promise<void> {
     await s.transport.close().catch(() => {});
   };
 
-  const openSession = async (): Promise<StreamableHTTPServerTransport> => {
+  const openSession = async (): Promise<NodeStreamableHTTPServerTransport> => {
     // The session id doubles as the owner of this session's pending fills,
     // so it is fixed before the context is built.
     const id = randomUUID();
     const ctx = sessionContext(broker, scopedFills(store, id, isLive));
-    const transport = new StreamableHTTPServerTransport({
+    const transport = new NodeStreamableHTTPServerTransport({
       sessionIdGenerator: () => id,
       onsessioninitialized: () => {
         sessions.set(id, { transport, ctx, lastSeen: Date.now() });
       },
     });
     transport.onclose = () => void closeSession(id);
-    // The cast only bridges the SDK's optional-property typing under
-    // exactOptionalPropertyTypes.
-    await createServer(ctx).connect(transport as Transport);
+    await createServer(ctx).connect(transport);
     return transport;
   };
 
   const handleMcp = async (req: IncomingMessage, res: ServerResponse) => {
     const sessionId = req.headers["mcp-session-id"];
     const body = req.method === "POST" ? await readJson(req) : undefined;
+
+    // Era routing (SDK v2 legacy-clients guide): 2025-era traffic goes to the
+    // sessionful transports below. isLegacyRequest is the SDK's own
+    // classifier, so this branch agrees with what createMcpHandler would do.
+    // GET and DELETE are session operations and always classify legacy.
+    // The cast only bridges `method?: string` under exactOptionalPropertyTypes.
+    if (
+      req.method === "POST" &&
+      !(await isLegacyRequest(
+        await toWebRequest(req as NodeIncomingMessageLike, body),
+        body,
+      ))
+    ) {
+      return rejectModern(res, req, body);
+    }
 
     if (typeof sessionId === "string") {
       const s = sessions.get(sessionId);
@@ -185,6 +308,10 @@ async function main(): Promise<void> {
       });
     }
     if (path !== "/mcp") return send(res, 404, { error: "not found" });
+    // Before auth and before any session work.
+    if (!originAllowed(req, allowedOrigins)) {
+      return rpcError(res, 403, "Origin not allowed");
+    }
     if (!authorized(req, token)) {
       return send(
         res,
