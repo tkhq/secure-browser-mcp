@@ -34,8 +34,7 @@ export type ToolContext = {
  */
 export type ToolDef<Shape extends ZodRawShape = ZodRawShape> = {
   name: string;
-  /** The OAuth scope a hosted caller needs to call this tool
-   * (src/auth/scopes.ts). */
+  /** The OAuth scope a hosted caller needs for this tool. */
   scope: Scope;
   description: string;
   inputSchema: Shape;

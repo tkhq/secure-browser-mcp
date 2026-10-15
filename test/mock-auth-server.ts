@@ -1,6 +1,6 @@
 /**
  * Test-only authorization server: publishes a JWKS over HTTP and mints JWT
- * access tokens signed with its current key. Not an OAuth implementation;
+ * access tokens signed with its one key. Not an OAuth implementation;
  * it has no endpoints but the JWKS, because the broker only ever reads the
  * key set.
  */
@@ -46,11 +46,10 @@ export class MockAuthServer {
   fetches = 0;
   /** While true the JWKS endpoint answers 503. */
   down = false;
-  private keys: Key[] = [];
-  private server: ReturnType<typeof Bun.serve>;
-
-  private constructor(server: ReturnType<typeof Bun.serve>) {
-    this.server = server;
+  private constructor(
+    private readonly server: ReturnType<typeof Bun.serve>,
+    private readonly key: Key,
+  ) {
     this.issuer = `http://127.0.0.1:${server.port}`;
     this.jwksUri = `${this.issuer}/jwks.json`;
   }
@@ -65,24 +64,14 @@ export class MockAuthServer {
           return new Response("not found", { status: 404 });
         self!.fetches++;
         if (self!.down) return new Response("down", { status: 503 });
-        return Response.json({ keys: self!.keys.map((k) => k.publicJwk) });
+        return Response.json({ keys: [self!.key.publicJwk] });
       },
     });
-    self = new MockAuthServer(server);
-    await self.rotate();
-    return self;
-  }
-
-  /** Publish a new signing key; later tokens use it. Old keys stay
-   * published unless `retire` is set. */
-  async rotate(retire = false): Promise<string> {
     const { privateKey, publicKey } = await generateKeyPair("ES256");
     const kid = randomUUID();
     const publicJwk = { ...(await exportJWK(publicKey)), kid, alg: "ES256" };
-    this.keys = retire
-      ? [{ kid, privateKey, publicJwk }]
-      : [...this.keys, { kid, privateKey, publicJwk }];
-    return kid;
+    self = new MockAuthServer(server, { kid, privateKey, publicJwk });
+    return self;
   }
 
   /** Sign with a key that was never published. */
@@ -92,7 +81,7 @@ export class MockAuthServer {
   }
 
   mint(opts: MintOptions = {}): Promise<string> {
-    return this.sign(this.keys[this.keys.length - 1]!, opts);
+    return this.sign(this.key, opts);
   }
 
   private sign(key: Key, opts: MintOptions): Promise<string> {

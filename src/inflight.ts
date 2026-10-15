@@ -2,25 +2,20 @@
  * JSON-RPC request ids in flight in one hosted MCP session.
  *
  * The SDK's Streamable HTTP transport sends each response on the HTTP
- * stream of the request with the same JSON-RPC id. A second request that
- * reuses an id while the first is in flight takes over the first one's
- * stream, and gets its response. Two tokens of the same subject, with
- * different scopes, can share a session, so this would let a browse-only
- * request read a list_secret_refs result. The broker refuses a request
- * whose id is in flight in its session (src/http.ts).
+ * stream of the request with the same id. A second request that reuses an
+ * id in flight would get the first one's response. Two tokens of one
+ * subject, with different scopes, can share a session, so a browse-only
+ * request could read a list_secret_refs result. src/http.ts refuses a
+ * request whose id is in flight.
  *
- * An id stays reserved until both of these are true:
- *  - the HTTP response that carried the request has ended, and
- *  - the server answered the id, the client cancelled it, or the request
- *    never reached the server (the transport refused the POST).
- * The second condition matters when a client disconnects during a call:
- * the SDK still maps the id, and would send the late answer to the next
- * request that uses the id.
+ * An id stays reserved until its HTTP response has ended and the server
+ * has answered it, the client cancelled it, or the transport never gave it
+ * to the server. After a client disconnect the SDK still maps the id and
+ * would send the late answer to the next request that uses it.
  */
 import type { JSONRPCMessage, RequestId } from "@modelcontextprotocol/server";
 
 type Entry = {
-  /** The HTTP response that carried the request has ended. */
   httpDone: boolean;
   /** The transport gave the request to the server. */
   dispatched: boolean;
@@ -31,9 +26,9 @@ type Entry = {
 const isId = (id: unknown): id is RequestId =>
   typeof id === "string" || typeof id === "number";
 
-/** The ids of the requests (messages with a method and an id) in a POST
- * body. Notifications and responses have no id that the transport maps. */
-export function requestIds(body: unknown): RequestId[] {
+/** Ids of the requests in a POST body. Notifications and responses have no
+ * id that the transport maps. */
+function requestIds(body: unknown): RequestId[] {
   const messages = Array.isArray(body) ? body : [body];
   const ids: RequestId[] = [];
   for (const m of messages) {
@@ -48,9 +43,8 @@ export class InFlightIds {
   private readonly entries = new Map<RequestId, Entry>();
 
   /**
-   * Reserve the request ids of a POST body. Refuses the whole body when an
-   * id is in flight, or appears twice in the body. On success, call `done`
-   * when the HTTP response ends; it is safe to call more than once.
+   * Reserve a POST body's request ids, or refuse the whole body when an id
+   * is in flight or appears twice. Call `done` when the HTTP response ends.
    */
   reserve(
     body: unknown,
@@ -101,10 +95,6 @@ export class InFlightIds {
   outbound(message: JSONRPCMessage): void {
     const m = message as { method?: unknown; id?: unknown };
     if (m.method === undefined) this.settle(m.id);
-  }
-
-  has(id: RequestId): boolean {
-    return this.entries.has(id);
   }
 
   private settle(id: unknown): void {

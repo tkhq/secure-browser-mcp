@@ -57,24 +57,22 @@ The hosted broker (`src/http.ts`, [HOSTED.md](HOSTED.md)) is a Turnkey-operated 
 | The tenant's authorization server        | No              | Never. It issues access tokens; the broker validates them and passes them nowhere.                                                                                                            |
 | The target site                          | Yes             | By design, as in v1.                                                                                                                                                                          |
 
-**Tenants and tokens.** Each tenant has its own endpoint, its own Turnkey organization and API key, and its own trusted authorization servers ([HOSTED.md](HOSTED.md#tenants)). The broker accepts only JWT access tokens whose issuer the tenant trusts, whose signature verifies against that issuer's published keys, whose audience is exactly the tenant's endpoint URL (or the tenant's configured `audience`, which no other tenant may share), and that have not expired. A token for one tenant is refused at another's endpoint even when both trust the same issuer. Every failure, including an unreachable JWKS, refuses the request. Tokens are never forwarded to Turnkey or Browserbase and never logged. Each tool needs a scope (`sbm:browse`, `sbm:fill`, or `sbm:refs`), checked on every call, so a token can be limited to driving the browser without filling secrets.
+**Tenants and tokens.** Each tenant has its own endpoint, Turnkey organization and API key, and trusted authorization servers ([HOSTED.md](HOSTED.md#tenants)). The broker accepts only JWT access tokens whose audience is exactly the tenant's, and no two tenants share an audience, so a token for one tenant fails at another even when both trust the same issuer. Every validation failure, including an unreachable JWKS, refuses the request. Tokens are never forwarded or logged. Each tool needs a scope, checked on every call, so a token can be limited to driving the browser. The shared bearer token remains only as a development mode (`SBM_DEV_SHARED_TOKEN`), off by default.
 
-What this changes from step 1:
+Tenant isolation covers:
 
-- A caller reaches only its tenant's secrets: the broker uses the tenant's API key, and Turnkey policy on that key bounds what it can export. Without per-tenant keys scoped by Turnkey policy, tenant separation rests on the broker's routing alone.
-- A session is bound to the tenant, the token subject (`iss`, `sub`), and the OAuth client (`azp` or `client_id`) that opened it. Its session id is useless to anyone else, including another client of the same subject.
-- A tenant can list the OAuth clients it trusts (`allowedClients`). Then a token issued to any other client is refused.
-- A parked fill belongs to one tenant and one subject. It is stored in the tenant's directory under the tenant's derived key. Another tenant cannot list, see, or redeem it, before or after a restart, and another subject of the same tenant cannot claim it after its session ends.
-- The shared bearer token survives only as a development mode (`SBM_DEV_SHARED_TOKEN`), off unless set, which logs a warning.
+- A caller reaches only its tenant's secrets, through the tenant's API key. Turnkey policy on that key bounds what it can export. Without per-tenant keys scoped by policy, tenant separation rests on the broker's routing alone.
+- A session answers only to the tenant, subject (`iss`, `sub`), and OAuth client that opened it.
+- A parked fill belongs to one tenant and one subject, and is stored under the tenant's derived key. No other tenant can see or redeem it, and no other subject can claim it.
+- With `allowedClients`, tokens issued to other clients are refused.
 
-What does not change:
+It does not cover:
 
-- The broker process holds plaintext during every fill, for every tenant. Tenants share one process: a compromise of the broker, or of anyone who can read its memory, exposes every tenant's fills in progress. Run separate deployments for tenants that must not share a process.
-- With Browserbase, Browserbase holds plaintext in the browser for the life of the session.
-- The authorization server is trusted for what it issues. A tenant whose authorization server is compromised, or that issues tokens with the broker's audience to the wrong subjects, exposes that tenant's secrets up to what its Turnkey policy and approvals allow. Approvals stay in Turnkey policy; the broker's scopes do not replace them.
-- Client trust. Without `allowedClients`, the broker trusts every client that the tenant's authorization server issues tokens to, including clients registered with dynamic client registration. If the authorization server lets any client register and get tokens for the broker's audience and the `sbm:*` scopes, any such client can act for a user who approves it. A parked fill belongs to the subject, not the client, so another trusted client of the same subject can claim it after its session ends.
-- `SBM_STATE_KEY` derives every tenant's state key. Anyone with the state volume and that key can decrypt every tenant's parked fills.
-- A token is a bearer token: anyone who steals an unexpired one can use it until it expires. The broker refuses tokens that live longer than 24 hours, so a stolen token works for one day at most. The broker does not support sender-constrained tokens (DPoP) yet.
+- The broker process holds plaintext during every fill, for every tenant. A compromise of the process exposes every tenant's fills in progress. Run separate deployments for tenants that must not share a process.
+- The authorization server is trusted for what it issues. If it is compromised, or issues tokens for the broker's audience to the wrong subjects, that tenant's secrets are exposed up to what its Turnkey policy and approvals allow.
+- Without `allowedClients`, every client the authorization server issues tokens to is trusted, including dynamically registered clients. A parked fill belongs to the subject, not the client, so another trusted client of the same subject can claim it.
+- `SBM_STATE_KEY` derives every tenant's key. The state volume and that key together decrypt every tenant's parked fills.
+- Tokens are bearer tokens. A stolen one works until it expires, for 24 hours at most. Sender-constrained tokens (DPoP) are not supported.
 
 **Parked fills hold key material.** A parked fill contains the ephemeral private key for an export that approvers may still approve. Anyone with both the state volume and `SBM_STATE_KEY` can decrypt that export after approval. The broker encrypts each parked fill with AES-256-GCM under its tenant's key and binds it to its file name, and drops parked fills after 24 hours.
 

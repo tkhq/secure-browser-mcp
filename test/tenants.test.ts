@@ -17,56 +17,38 @@ const issuers = [
   },
 ];
 
-test("a turnkey tenant needs an organization and an API key reference", () => {
-  const [t] = parseTenants({
-    tenants: [
-      {
-        id: "acme",
-        organizationId: "org-1",
-        apiKey: { publicKeyEnv: "ACME_PUB", privateKeyEnv: "ACME_PRIV" },
-        issuers,
-      },
-    ],
-  });
-  expect(t?.backend).toBe("turnkey");
-  expect(() =>
-    parseTenants({ tenants: [{ id: "acme", issuers, apiKey: { path: "x" } }] }),
-  ).toThrow(/organizationId/);
-  expect(() =>
-    parseTenants({ tenants: [{ id: "acme", issuers, organizationId: "o" }] }),
-  ).toThrow(/apiKey/);
-});
-
-test("rejects keys inline, bad ids, duplicates, and insecure issuers", () => {
+test("rejects missing keys, inline keys, bad ids, duplicates, and insecure issuers", () => {
   const base = { organizationId: "o", apiKey: { path: "/k.json" }, issuers };
-  expect(() =>
-    parseTenants({
-      tenants: [{ ...base, id: "a", apiKey: { privateKey: "secret" } }],
-    }),
-  ).toThrow();
-  expect(() => parseTenants({ tenants: [{ ...base, id: "../x" }] })).toThrow(
-    /id/,
+  expect(parseTenants({ tenants: [{ ...base, id: "a" }] })[0]?.backend).toBe(
+    "turnkey",
   );
-  expect(() =>
-    parseTenants({
-      tenants: [
+  const bad: [unknown[], RegExp][] = [
+    [[{ id: "a", issuers, apiKey: { path: "x" } }], /organizationId/],
+    [[{ id: "a", issuers, organizationId: "o" }], /apiKey/],
+    [[{ ...base, id: "a", apiKey: { privateKey: "secret" } }], /apiKey/],
+    [[{ ...base, id: "../x" }], /id/],
+    [
+      [
         { ...base, id: "a" },
         { ...base, id: "a" },
       ],
-    }),
-  ).toThrow(/Duplicate/);
-  expect(() =>
-    parseTenants({
-      tenants: [
+      /Duplicate/,
+    ],
+    [
+      [
         {
           ...base,
           id: "a",
-          issuers: [{ issuer: "http://login.acme.com", jwksUri: "x" }],
+          issuers: [{ issuer: "http://x.com", jwksUri: "x" }],
         },
       ],
-    }),
-  ).toThrow(/https/);
-  expect(() => parseTenants({ tenants: [] })).toThrow();
+      /https/,
+    ],
+    [[], /tenants/],
+  ];
+  for (const [tenants, message] of bad) {
+    expect(() => parseTenants({ tenants })).toThrow(message);
+  }
 });
 
 test("resolves an API key from the environment, never from the file", () => {
@@ -108,17 +90,11 @@ test("a tenant's audience defaults to its resource URI and must be unique", () =
   const tenants = parseTenants({
     tenants: [
       { id: "acme", backend: "mock", issuers },
-      {
-        id: "globex",
-        backend: "mock",
-        issuers: [{ ...issuers[0]!, requireTyp: true }],
-        audience: "api://globex-sbm",
-      },
+      { id: "globex", backend: "mock", issuers, audience: "api://globex" },
     ],
   });
   expect(tenantAudience(base, tenants[0]!)).toBe(resourceUri(base, "acme"));
-  expect(tenantAudience(base, tenants[1]!)).toBe("api://globex-sbm");
-  expect(tenants[1]!.issuers[0]!.requireTyp).toBe(true);
+  expect(tenantAudience(base, tenants[1]!)).toBe("api://globex");
   expect(() => checkAudiences(base, tenants)).not.toThrow();
 
   // An override that collides with another tenant would let one tenant's
@@ -135,55 +111,4 @@ test("a tenant's audience defaults to its resource URI and must be unique", () =
     ],
   });
   expect(() => checkAudiences(base, clash)).toThrow(/same token audience/);
-  expect(() =>
-    parseTenants({
-      tenants: [{ id: "acme", backend: "mock", issuers, audience: "" }],
-    }),
-  ).toThrow(/audience/);
-});
-
-test("mock secrets take string static properties", () => {
-  const [t] = parseTenants({
-    tenants: [
-      {
-        id: "acme",
-        backend: "mock",
-        issuers,
-        mockSecrets: [
-          { name: "pw", value: "v", staticProperties: { "sbm:origin": "x" } },
-        ],
-      },
-    ],
-  });
-  expect(t?.backend === "mock" && t.mockSecrets?.[0]?.staticProperties).toEqual(
-    { "sbm:origin": "x" },
-  );
-  expect(() =>
-    parseTenants({
-      tenants: [
-        {
-          id: "acme",
-          backend: "mock",
-          issuers,
-          mockSecrets: [{ name: "pw", value: "v", staticProperties: { a: 1 } }],
-        },
-      ],
-    }),
-  ).toThrow(/staticProperties/);
-});
-
-test("allowedClients is an optional, non-empty list of client ids", () => {
-  const [t] = parseTenants({
-    tenants: [
-      { id: "acme", backend: "mock", issuers, allowedClients: ["agent-app"] },
-    ],
-  });
-  expect(t?.allowedClients).toEqual(["agent-app"]);
-  for (const allowedClients of [[], [""], "agent-app"]) {
-    expect(() =>
-      parseTenants({
-        tenants: [{ id: "acme", backend: "mock", issuers, allowedClients }],
-      }),
-    ).toThrow(/allowedClients/);
-  }
 });

@@ -28,8 +28,6 @@ import type { ToolContext } from "./tools/tool.js";
 // SBM_MOCK_CONSENSUS (comma-separated secret names) makes those mock secrets
 // consensus-gated, with approval arriving SBM_MOCK_CONSENSUS_DELAY_MS after
 // the first export attempt — enough to exercise the pending → await flow.
-// SBM_MOCK_LIST_DELAY_MS (tests only) makes every mock listRefs call take
-// that long.
 export type Secrets = {
   client: SecretsClient;
   backend: "mock" | "turnkey";
@@ -43,25 +41,23 @@ export function makeSecretsClient(): Secrets {
   return { client: mockFromEnv(), backend: "mock" };
 }
 
-function mockFromEnv(seed?: TenantMockSeed): MockSecretsClient {
+function mockFromEnv(
+  tenant?: Extract<TenantConfig, { backend: "mock" }>,
+): MockSecretsClient {
   const consensus = process.env["SBM_MOCK_CONSENSUS"];
   const delay = Number(process.env["SBM_MOCK_CONSENSUS_DELAY_MS"] ?? "3000");
-  const listDelayMs = Number(process.env["SBM_MOCK_LIST_DELAY_MS"] ?? "0");
-  return new MockSecretsClient(seed, {
+  return new MockSecretsClient(tenant?.mockSecrets, {
     ...(consensus
       ? { consensusNames: consensus.split(","), approvalDelayMs: delay }
       : {}),
-    ...(listDelayMs > 0 ? { listDelayMs } : {}),
+    listDelayMs: tenant?.listDelayMs,
   });
 }
 
-type TenantMockSeed = Extract<TenantConfig, { backend: "mock" }>["mockSecrets"];
-
-/** The secrets a hosted tenant's sessions see: its own Turnkey
- * organization, through its own API key. */
+/** A hosted tenant's secrets: its own organization, through its own key. */
 export function tenantSecretsClient(tenant: TenantConfig): Secrets {
   if (tenant.backend === "mock") {
-    return { client: mockFromEnv(tenant.mockSecrets), backend: "mock" };
+    return { client: mockFromEnv(tenant), backend: "mock" };
   }
   const apiClient = turnkeyClient({
     ...resolveApiKey(tenant),

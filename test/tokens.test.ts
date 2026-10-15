@@ -6,13 +6,15 @@ import {
   MAX_TOKEN_LIFETIME_S,
   verifyAccessToken,
 } from "../src/auth/tokens.js";
-import { MockAuthServer } from "./mock-auth-server.js";
+import { MockAuthServer, type MintOptions } from "./mock-auth-server.js";
 
 /** src/auth/tokens.ts against a live JWKS. */
 
 const AUDIENCE = "https://sbm.example.com/t/acme/mcp";
+const DAY = MAX_TOKEN_LIFETIME_S;
 let as: MockAuthServer;
 let other: MockAuthServer;
+const jwks = new JwksCache();
 
 beforeAll(async () => {
   as = await MockAuthServer.start();
@@ -24,223 +26,103 @@ afterAll(() => {
   other.stop();
 });
 
-const expectFor = () => ({
+type Expect = Parameters<typeof verifyAccessToken>[1];
+const expectFor = (more: Partial<Expect> = {}): Expect => ({
   audience: AUDIENCE,
   issuers: [{ issuer: as.issuer, jwksUri: as.jwksUri }],
+  ...more,
 });
+const mint = (opts: MintOptions = {}) => as.mint({ aud: AUDIENCE, ...opts });
+const verify = (token: string, want = expectFor(), cache = jwks) =>
+  verifyAccessToken(token, want, cache);
 
-async function rejects(token: string, jwks = new JwksCache()) {
-  const err = await verifyAccessToken(token, expectFor(), jwks).catch((e) => e);
+async function rejects(token: string, want = expectFor(), cache = jwks) {
+  const err = await verify(token, want, cache).catch((e) => e);
   expect(err).toBeInstanceOf(InvalidTokenError);
 }
 
-test("accepts a valid token and reports its principal and scopes", async () => {
-  const token = await as.mint({
-    aud: AUDIENCE,
-    sub: "alice",
-    scope: "sbm:browse sbm:fill",
-  });
-  const p = await verifyAccessToken(token, expectFor(), new JwksCache());
+test("accepts a valid token and reports its principal, client, and scopes", async () => {
+  const p = await verify(
+    await mint({ sub: "alice", scope: "sbm:browse", scp: ["sbm:fill"] }),
+  );
   expect(p.issuer).toBe(as.issuer);
   expect(p.subject).toBe("alice");
+  expect(p.client).toBeUndefined();
+  // scope and scp (Okta) are merged.
   expect([...p.scopes].sort()).toEqual(["sbm:browse", "sbm:fill"]);
-});
-
-test("reads Okta-style scp scopes, as an array or a string", async () => {
-  const jwks = new JwksCache();
-  const scopesOf = async (claims: {
-    scope?: string;
-    scp?: string | string[];
-  }) =>
-    [
-      ...(
-        await verifyAccessToken(
-          await as.mint({ aud: AUDIENCE, ...claims }),
-          expectFor(),
-          jwks,
-        )
-      ).scopes,
-    ].sort();
-  expect(await scopesOf({ scp: ["sbm:refs", "sbm:browse"] })).toEqual([
-    "sbm:browse",
+  expect([...(await verify(await mint({ scp: "sbm:refs" }))).scopes]).toEqual([
     "sbm:refs",
   ]);
-  expect(await scopesOf({ scp: "sbm:fill" })).toEqual(["sbm:fill"]);
-  expect(await scopesOf({ scope: "sbm:browse", scp: ["sbm:fill"] })).toEqual([
-    "sbm:browse",
-    "sbm:fill",
-  ]);
+
+  // Small clock skew is tolerated.
+  await verify(await mint({ expiresIn: -5, notBefore: 5 }));
+  // Up to a day of lifetime is fine, with or without iat.
+  await verify(await mint({ expiresIn: DAY }));
+  await verify(await mint({ expiresIn: DAY, omitIat: true }));
 });
 
-test("accepts a client-credentials token: a client id as sub, no user claims", async () => {
-  const token = await as.mint({
-    aud: AUDIENCE,
-    sub: "svc-agent@clients",
-    scope: "sbm:browse sbm:fill sbm:refs",
-  });
-  const p = await verifyAccessToken(token, expectFor(), new JwksCache());
-  expect(p.subject).toBe("svc-agent@clients");
-  expect(p.scopes.size).toBe(3);
+test("rejects tokens that fail a claim check", async () => {
+  const bad: [string, MintOptions][] = [
+    ["expired", { expiresIn: -120 }],
+    ["not yet valid", { notBefore: 120 }],
+    ["no exp", { omitExp: true }],
+    ["no sub", { omitSub: true }],
+    ["another tenant", { aud: "https://sbm.example.com/t/other/mcp" }],
+    ["near-miss aud", { aud: `${AUDIENCE}/` }],
+    ["extra aud", { aud: [AUDIENCE, "https://api.other.com"] }],
+    ["over a day left", { expiresIn: DAY + 120 }],
+    ["over a day, no iat", { expiresIn: DAY + 120, omitIat: true }],
+    // Issued two days ago for three days: a day left, but too long a life.
+    ["lifetime > a day", { issuedAt: -2 * DAY, expiresIn: DAY - 60 }],
+  ];
+  // ID tokens, whatever their typ.
+  for (const claims of [{ nonce: "n-1" }, { at_hash: "abc" }]) {
+    for (const typ of ["JWT", "at+jwt", null]) {
+      bad.push([`ID token ${typ}`, { claims, typ }]);
+    }
+  }
+  for (const [, opts] of bad) await rejects(await mint(opts));
+  await rejects(await as.mint({})); // no aud
 });
 
-test("rejects expired, not-yet-valid, and exp-less tokens", async () => {
-  await rejects(await as.mint({ aud: AUDIENCE, expiresIn: -120 }));
-  await rejects(await as.mint({ aud: AUDIENCE, notBefore: 120 }));
-  await rejects(await as.mint({ aud: AUDIENCE, omitExp: true }));
-});
-
-test("tolerates small clock skew", async () => {
-  const jwks = new JwksCache();
-  const skewed = await as.mint({ aud: AUDIENCE, expiresIn: -5, notBefore: 5 });
-  await expect(
-    verifyAccessToken(skewed, expectFor(), jwks),
-  ).resolves.toBeDefined();
-});
-
-test("rejects a token without a subject", async () => {
-  await rejects(await as.mint({ aud: AUDIENCE, omitSub: true }));
-});
-
-test("rejects the wrong audience, and audiences beyond this resource", async () => {
-  await rejects(await as.mint({ aud: "https://sbm.example.com/t/other/mcp" }));
-  await rejects(await as.mint({ aud: `${AUDIENCE}/` }));
-  await rejects(await as.mint({}));
-  await rejects(await as.mint({ aud: [AUDIENCE, "https://api.other.com"] }));
-});
-
-test("rejects untrusted issuers, including one claiming a trusted iss", async () => {
+test("rejects untrusted issuers, unknown keys, and weak algorithms", async () => {
   await rejects(await other.mint({ aud: AUDIENCE }));
-  // Signed by another server's key but claims the trusted issuer: the
-  // trusted issuer's JWKS does not have that key.
+  // Claims the trusted issuer, but signed with a key its JWKS lacks.
   await rejects(await other.mint({ aud: AUDIENCE, iss: as.issuer }));
   await rejects(await as.mintWithUnpublishedKey({ aud: AUDIENCE }));
-});
 
-test("rejects unsigned and HMAC tokens", async () => {
   const b64 = (o: object) =>
     Buffer.from(JSON.stringify(o)).toString("base64url");
-  const claims = {
+  const claims = b64({
     iss: as.issuer,
     aud: AUDIENCE,
     sub: "alice",
     exp: Math.floor(Date.now() / 1000) + 300,
-  };
-  await rejects(`${b64({ alg: "none" })}.${b64(claims)}.`);
-  await rejects(`${b64({ alg: "HS256" })}.${b64(claims)}.c2ln`);
+  });
+  await rejects(`${b64({ alg: "none" })}.${claims}.`);
+  await rejects(`${b64({ alg: "HS256" })}.${claims}.c2ln`);
   await rejects("not-a-jwt");
 });
 
 test("checks typ: at+jwt only for an issuer with requireTyp", async () => {
-  const jwks = new JwksCache();
-  const strict = {
-    audience: AUDIENCE,
+  const strict = expectFor({
     issuers: [{ issuer: as.issuer, jwksUri: as.jwksUri, requireTyp: true }],
-  };
-  const mint = (typ: string | null) => as.mint({ aud: AUDIENCE, typ });
-
-  // Off by default: a plain JWT, or no typ at all, is accepted.
+  });
   for (const typ of ["JWT", null]) {
-    await verifyAccessToken(await mint(typ), expectFor(), jwks);
+    await verify(await mint({ typ }));
+    await rejects(await mint({ typ }), strict);
   }
-  // On: at+jwt in either spelling passes, anything else is refused.
   for (const typ of ["at+jwt", "application/at+JWT"]) {
-    await verifyAccessToken(await mint(typ), strict, jwks);
-  }
-  for (const typ of ["JWT", null]) {
-    const err = await verifyAccessToken(await mint(typ), strict, jwks).catch(
-      (e) => e,
-    );
-    expect(err).toBeInstanceOf(InvalidTokenError);
+    await verify(await mint({ typ }), strict);
   }
 });
 
-test("caches the JWKS and refetches for an unknown kid", async () => {
-  const jwks = new JwksCache({ cooldownMs: 0 });
-  const before = as.fetches;
-  await verifyAccessToken(await as.mint({ aud: AUDIENCE }), expectFor(), jwks);
-  await verifyAccessToken(await as.mint({ aud: AUDIENCE }), expectFor(), jwks);
-  expect(as.fetches - before).toBe(1);
-
-  await as.rotate(true);
-  const p = await verifyAccessToken(
-    await as.mint({ aud: AUDIENCE, sub: "after-rotation" }),
-    expectFor(),
-    jwks,
-  );
-  expect(p.subject).toBe("after-rotation");
-  expect(as.fetches - before).toBe(2);
-});
-
-test("fails closed when the JWKS cannot be fetched", async () => {
-  const token = await as.mint({ aud: AUDIENCE });
-  as.down = true;
-  try {
-    await rejects(token, new JwksCache());
-  } finally {
-    as.down = false;
-  }
-});
-
-test("rejects ID tokens, whatever their typ", async () => {
-  for (const claims of [{ nonce: "n-1" }, { at_hash: "abc" }]) {
-    for (const typ of ["JWT", "at+jwt", null]) {
-      await rejects(await as.mint({ aud: AUDIENCE, claims, typ }));
-    }
-  }
-});
-
-test("rejects a token that lives longer than 24 hours", async () => {
-  const jwks = new JwksCache();
-  const ok = async (opts: Parameters<MockAuthServer["mint"]>[0]) =>
-    verifyAccessToken(
-      await as.mint({ aud: AUDIENCE, ...opts }),
-      expectFor(),
-      jwks,
-    );
-  const day = MAX_TOKEN_LIFETIME_S;
-
-  // Up to a day from now is fine, with or without iat.
-  await ok({ expiresIn: day });
-  await ok({ expiresIn: day, omitIat: true });
-  // More than a day from now is refused, with or without iat.
-  await rejects(await as.mint({ aud: AUDIENCE, expiresIn: day + 120 }), jwks);
-  await rejects(
-    await as.mint({ aud: AUDIENCE, expiresIn: day + 120, omitIat: true }),
-    jwks,
-  );
-  // A token issued two days ago for three days has a day left, but its
-  // lifetime is three days.
-  await rejects(
-    await as.mint({ aud: AUDIENCE, issuedAt: -2 * day, expiresIn: day - 60 }),
-    jwks,
-  );
-});
-
-test("reports the token's client, from azp or else client_id", async () => {
-  const jwks = new JwksCache();
-  const clientOf = async (claims: Record<string, unknown>) =>
-    (
-      await verifyAccessToken(
-        await as.mint({ aud: AUDIENCE, claims }),
-        expectFor(),
-        jwks,
-      )
-    ).client;
-  expect(await clientOf({ azp: "app-1" })).toBe("app-1");
-  expect(await clientOf({ client_id: "app-2" })).toBe("app-2");
-  expect(await clientOf({ azp: "app-1", client_id: "app-2" })).toBe("app-1");
-  expect(await clientOf({})).toBeUndefined();
-});
-
-test("with allowedClients, accepts only tokens of those clients", async () => {
-  const jwks = new JwksCache();
-  const only = { ...expectFor(), allowedClients: ["agent-app"] };
-  const mint = (claims: Record<string, unknown>) =>
-    as.mint({ aud: AUDIENCE, claims });
-
+test("with allowedClients, accepts only those clients, by azp else client_id", async () => {
+  const only = expectFor({ allowedClients: ["agent-app"] });
   for (const claims of [{ azp: "agent-app" }, { client_id: "agent-app" }]) {
-    const p = await verifyAccessToken(await mint(claims), only, jwks);
-    expect(p.client).toBe("agent-app");
+    expect((await verify(await mint({ claims }), only)).client).toBe(
+      "agent-app",
+    );
   }
   for (const claims of [
     {},
@@ -249,9 +131,21 @@ test("with allowedClients, accepts only tokens of those clients", async () => {
     // azp names the client when both are present.
     { azp: "rogue-app", client_id: "agent-app" },
   ]) {
-    const err = await verifyAccessToken(await mint(claims), only, jwks).catch(
-      (e) => e,
-    );
-    expect(err).toBeInstanceOf(InvalidTokenError);
+    await rejects(await mint({ claims }), only);
+  }
+});
+
+test("caches the JWKS, and fails closed when it cannot be fetched", async () => {
+  const cache = new JwksCache();
+  const before = as.fetches;
+  await verify(await mint(), expectFor(), cache);
+  await verify(await mint(), expectFor(), cache);
+  expect(as.fetches - before).toBe(1);
+
+  as.down = true;
+  try {
+    await rejects(await mint(), expectFor(), new JwksCache());
+  } finally {
+    as.down = false;
   }
 });

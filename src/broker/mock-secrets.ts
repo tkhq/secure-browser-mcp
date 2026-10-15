@@ -19,7 +19,7 @@ type MockOptions = {
   /** How long after the first export attempt approval "arrives". */
   approvalDelayMs?: number;
   /** Tests only: how long listRefs takes, to hold a call in flight. */
-  listDelayMs?: number;
+  listDelayMs?: number | undefined;
 };
 
 /**

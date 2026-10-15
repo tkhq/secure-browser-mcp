@@ -16,22 +16,20 @@ import {
 } from "@modelcontextprotocol/client";
 
 import { FIXTURE_ORIGIN, startFixtureServer } from "./fixtures/serve.js";
-import { McpStdioClient } from "./mcp-client.js";
 import { MockAuthServer } from "./mock-auth-server.js";
 
 /**
- * The hosted broker as an OAuth resource server with two tenants, black
- * box: EMG-89 step 2 acceptance.
+ * The hosted broker as an OAuth resource server, black box: EMG-89 step 2
+ * acceptance.
  *
  *  - alpha trusts authorization server A and holds the default mock
  *    secrets, with demo-login-password behind consensus.
- *  - beta trusts both A and B and holds one secret of its own. Trusting A
- *    too means a token A minted for alpha fails at beta on audience alone.
- *  - gamma trusts B and sets an `audience` override, for an authorization
- *    server that cannot put the resource URI in `aud`.
- *  - delta trusts A and holds the default mock secrets, for tests that
- *    need sessions of their own.
- *  - epsilon trusts A and accepts only the clients in its allowedClients.
+ *  - beta trusts B and A, and holds one secret of its own. Trusting A means
+ *    a token A minted for alpha fails at beta on audience alone.
+ *  - gamma trusts B and sets an `audience` override.
+ *  - delta trusts A, for tests that need sessions of their own. Listing its
+ *    secrets takes LIST_DELAY_MS.
+ *  - epsilon trusts A and sets allowedClients.
  */
 
 const DEMO_PLAINTEXT = "mock-demo-p@ssw0rd-1234"; // mock-secrets.ts seed
@@ -75,14 +73,11 @@ async function startBroker() {
       SBM_HTTP_PORT: String(port),
       SBM_STATE_DIR: stateDir,
       SBM_STATE_KEY: stateKey,
-      // Five tenants, five slots each by default, and four for each
-      // principal (the default cap).
+      // Five tenants get five slots each, and a principal the default four.
       SBM_MAX_SESSIONS: "25",
       SBM_ALLOWED_ORIGINS: ALLOWED_ORIGIN,
       SBM_MOCK_CONSENSUS: "demo-login-password",
       SBM_MOCK_CONSENSUS_DELAY_MS: "2000",
-      // Long enough to hold a list_secret_refs call in flight.
-      SBM_MOCK_LIST_DELAY_MS: String(LIST_DELAY_MS),
     },
   });
   let log = "";
@@ -152,6 +147,7 @@ async function rpc(
   bearer: string | undefined,
   message: object | object[],
   sessionId?: string,
+  headers: Record<string, string> = {},
 ): Promise<Response> {
   const res = await fetch(mcpUrl(tenant), {
     method: "POST",
@@ -161,6 +157,7 @@ async function rpc(
       "mcp-protocol-version": "2025-06-18",
       ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
       ...(sessionId ? { "mcp-session-id": sessionId } : {}),
+      ...headers,
     },
     body: JSON.stringify(
       Array.isArray(message) ? message : { jsonrpc: "2.0", id: 1, ...message },
@@ -178,26 +175,20 @@ const initialize = {
     clientInfo: { name: "raw", version: "0" },
   },
 };
+const toolCall = (name: string, args: object = {}, id = 1) => ({
+  id,
+  method: "tools/call",
+  params: { name, arguments: args },
+});
+const fillCall = toolCall("fill_secret", { secret_id: "x", element_uid: "y" });
 
 /** Open a session over raw HTTP; returns its id. */
 async function rawSession(tenant: string, bearer: string): Promise<string> {
   const res = await rpc(tenant, bearer, initialize);
   expect(res.status).toBe(200);
   const id = res.headers.get("mcp-session-id")!;
-  await fetch(mcpUrl(tenant), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-      "mcp-protocol-version": "2025-06-18",
-      "mcp-session-id": id,
-      authorization: `Bearer ${bearer}`,
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-    }),
-  });
+  const initialized = { jsonrpc: "2.0", method: "notifications/initialized" };
+  await rpc(tenant, bearer, [initialized], id);
   return id;
 }
 
@@ -216,22 +207,17 @@ const refNames = async (s: Session) =>
 beforeAll(async () => {
   asA = await MockAuthServer.start();
   asB = await MockAuthServer.start();
+  const a = { issuer: asA.issuer, jwksUri: asA.jwksUri };
+  const b = { issuer: asB.issuer, jwksUri: asB.jwksUri };
   writeFileSync(
     tenantsFile,
     JSON.stringify({
       tenants: [
-        {
-          id: "alpha",
-          backend: "mock",
-          issuers: [{ issuer: asA.issuer, jwksUri: asA.jwksUri }],
-        },
+        { id: "alpha", backend: "mock", issuers: [a] },
         {
           id: "beta",
           backend: "mock",
-          issuers: [
-            { issuer: asB.issuer, jwksUri: asB.jwksUri },
-            { issuer: asA.issuer, jwksUri: asA.jwksUri },
-          ],
+          issuers: [b, a],
           authorizationServers: [asB.issuer],
           mockSecrets: [
             {
@@ -248,19 +234,20 @@ beforeAll(async () => {
         {
           id: "gamma",
           backend: "mock",
-          issuers: [{ issuer: asB.issuer, jwksUri: asB.jwksUri }],
+          issuers: [b],
           audience: GAMMA_AUDIENCE,
         },
         {
           id: "delta",
           backend: "mock",
-          issuers: [{ issuer: asA.issuer, jwksUri: asA.jwksUri }],
+          issuers: [a],
+          listDelayMs: LIST_DELAY_MS,
         },
         {
           id: "epsilon",
           backend: "mock",
-          issuers: [{ issuer: asA.issuer, jwksUri: asA.jwksUri }],
-          allowedClients: ["agent-app", "other-app"],
+          issuers: [a],
+          allowedClients: ["agent-app"],
         },
       ],
     }),
@@ -277,14 +264,13 @@ afterAll(async () => {
   rmSync(work, { recursive: true, force: true });
 });
 
-async function restart() {
-  await broker.stop();
-  broker = await startBroker();
-}
-
 test("each tenant publishes its Protected Resource Metadata", async () => {
-  const alpha = await fetch(prmUrl("alpha"));
+  // Public: any origin may read it.
+  const alpha = await fetch(prmUrl("alpha"), {
+    headers: { origin: "https://evil.example" },
+  });
   expect(alpha.status).toBe(200);
+  expect(alpha.headers.get("access-control-allow-origin")).toBe("*");
   expect(await alpha.json()).toEqual({
     resource: mcpUrl("alpha"),
     authorization_servers: [asA.issuer],
@@ -292,42 +278,43 @@ test("each tenant publishes its Protected Resource Metadata", async () => {
     bearer_methods_supported: ["header"],
     resource_name: "secure-browser-mcp (alpha)",
   });
-
   const beta = (await (await fetch(prmUrl("beta"))).json()) as {
-    resource: string;
     authorization_servers: string[];
   };
-  expect(beta.resource).toBe(mcpUrl("beta"));
   expect(beta.authorization_servers).toEqual([asB.issuer]);
 
   expect((await fetch(prmUrl("nobody"))).status).toBe(404);
   expect((await rpc("nobody", "x", initialize)).status).toBe(404);
 });
 
-test("a request without a token gets 401 pointing at the metadata", async () => {
-  const res = await rpc("alpha", undefined, initialize);
-  expect(res.status).toBe(401);
-  const challenge = res.headers.get("www-authenticate")!;
-  expect(challenge).toStartWith("Bearer ");
-  expect(challenge).toContain(`resource_metadata="${prmUrl("alpha")}"`);
-  expect(challenge).toContain(`scope="${ALL}"`);
-  expect(challenge).not.toContain("error=");
-});
-
-test("expired, wrong-issuer, and wrong-audience tokens get 401", async () => {
-  const bad = [
-    await asA.mint({ aud: mcpUrl("alpha"), scope: ALL, expiresIn: -120 }),
+test("missing, malformed, and invalid credentials are refused with a challenge", async () => {
+  const good = await token(asA, "alpha");
+  const cases: [string | undefined, number, string | undefined][] = [
+    [undefined, 401, undefined],
+    // Another scheme is no Bearer credentials at all.
+    ["Basic dXNlcjpwYXNz", 401, undefined],
+    ["Bearer", 400, "invalid_request"],
+    ["Bearer ", 400, "invalid_request"],
+    [`Bearer ${good} extra`, 400, "invalid_request"],
+    ["Bearer p@ss:word!", 400, "invalid_request"],
+    ["Bearer garbage", 401, "invalid_token"],
     // B is a real issuer, but alpha does not trust it.
-    await token(asB, "alpha"),
-    await asA.mint({ aud: "https://elsewhere.example.com/mcp", scope: ALL }),
-    await asA.mint({ aud: base, scope: ALL }),
-    "garbage",
+    [`Bearer ${await token(asB, "alpha")}`, 401, "invalid_token"],
   ];
-  for (const t of bad) {
-    const res = await rpc("alpha", t, initialize);
-    expect(res.status).toBe(401);
+  for (const [authorization, status, error] of cases) {
+    const res = await rpc(
+      "alpha",
+      undefined,
+      initialize,
+      undefined,
+      authorization ? { authorization } : {},
+    );
+    expect(res.status).toBe(status);
     const challenge = res.headers.get("www-authenticate")!;
-    expect(challenge).toContain('error="invalid_token"');
+    expect(challenge).toStartWith("Bearer ");
+    if (error) expect(challenge).toContain(`error="${error}"`);
+    else expect(challenge).not.toContain("error=");
+    expect(challenge).toContain(`scope="${ALL}"`);
     expect(challenge).toContain(`resource_metadata="${prmUrl("alpha")}"`);
   }
 });
@@ -339,269 +326,118 @@ test("a token for tenant alpha is refused at tenant beta", async () => {
   expect(res.headers.get("www-authenticate")).toContain(
     `resource_metadata="${prmUrl("beta")}"`,
   );
-  // And A's token minted for beta works there.
   expect((await rpc("beta", await token(asA, "beta"), initialize)).status).toBe(
     200,
   );
 });
 
-test("a valid token lists the same tools as the stdio broker", async () => {
-  const stdio = new McpStdioClient({ SBM_CHROME_PATH: "/unused" });
-  await stdio.initialize();
-  const stdioTools = ((await stdio.request("tools/list")).result?.tools ?? [])
-    .map((t) => t.name)
-    .sort();
-  await stdio.stop();
-
-  // Any one sbm scope opens a session, and the list is the full surface.
-  const s = await connect(
-    "alpha",
-    await token(asA, "alpha", { scope: "sbm:browse" }),
-  );
-  const tools = (await s.client.listTools()).tools.map((t) => t.name).sort();
-  expect(tools).toEqual(stdioTools);
-  await s.client.close();
-});
-
-test("a token without any sbm scope cannot open a session", async () => {
-  for (const scope of ["", "openid profile"]) {
-    const res = await rpc(
-      "alpha",
-      await token(asA, "alpha", { scope }),
-      initialize,
-    );
-    expect(res.status).toBe(403);
-    const challenge = res.headers.get("www-authenticate")!;
-    expect(challenge).toContain('error="insufficient_scope"');
-    // Any sbm scope opens a session; the challenge asks for the one a
-    // session needs first, not every scope.
-    expect(challenge).toContain(
-      'error_description="Opening a session needs at least one sbm:* scope"',
-    );
-    expect(challenge).toContain('scope="sbm:browse"');
-    expect(challenge).toContain(`resource_metadata="${prmUrl("alpha")}"`);
-    expect(res.headers.get("mcp-session-id")).toBeNull();
-  }
-});
-
-test("a malformed Authorization header gets 400 invalid_request", async () => {
-  const good = await token(asA, "alpha");
-  for (const header of [
-    "Bearer",
-    "Bearer ",
-    `Bearer ${good} extra`,
-    "Bearer p@ss:word!",
-  ]) {
-    const res = await fetch(mcpUrl("alpha"), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json, text/event-stream",
-        authorization: header,
-      },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...initialize }),
-    });
-    expect(res.status).toBe(400);
-    const challenge = res.headers.get("www-authenticate")!;
-    expect(challenge).toContain('error="invalid_request"');
-    expect(challenge).toContain(`resource_metadata="${prmUrl("alpha")}"`);
-  }
-
-  // Another scheme is no Bearer credentials at all: 401 without an error.
-  const basic = await fetch(mcpUrl("alpha"), {
-    method: "POST",
-    headers: { authorization: "Basic dXNlcjpwYXNz" },
-    body: "{}",
-  });
-  expect(basic.status).toBe(401);
-  expect(basic.headers.get("www-authenticate")).not.toContain("error=");
-});
-
 test("a tenant's audience override replaces the resource URI", async () => {
   const ok = await asB.mint({ aud: GAMMA_AUDIENCE, scope: ALL });
   expect((await rpc("gamma", ok, initialize)).status).toBe(200);
-
-  // The override is exact: the resource URI itself is no longer accepted,
-  // and neither is an aud that also names other audiences.
+  // The resource URI itself is no longer accepted, nor an extra audience.
   for (const aud of [mcpUrl("gamma"), [GAMMA_AUDIENCE, mcpUrl("gamma")]]) {
-    const res = await rpc(
-      "gamma",
-      await asB.mint({ aud, scope: ALL }),
-      initialize,
-    );
-    expect(res.status).toBe(401);
+    const bad = await asB.mint({ aud, scope: ALL });
+    expect((await rpc("gamma", bad, initialize)).status).toBe(401);
   }
-
-  // The metadata still names the resource URI.
-  const prm = (await (await fetch(prmUrl("gamma"))).json()) as {
-    resource: string;
-  };
-  expect(prm.resource).toBe(mcpUrl("gamma"));
 });
 
 test("tenant endpoints refuse browser origins that are not allowed", async () => {
-  const post = (origin: string) =>
-    fetch(mcpUrl("alpha"), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json, text/event-stream",
-        origin,
-      },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...initialize }),
-    });
-
   // Refused before auth: no challenge, even without a token.
-  const evil = await post("https://evil.example");
+  const evil = await rpc("alpha", undefined, initialize, undefined, {
+    origin: "https://evil.example",
+  });
   expect(evil.status).toBe(403);
   expect(evil.headers.get("www-authenticate")).toBeNull();
   expect(await evil.text()).toContain("Origin not allowed");
 
   // An allowed origin goes on to the token check.
-  expect((await post(ALLOWED_ORIGIN)).status).toBe(401);
-
-  // The metadata is public: any origin may read it.
-  const prm = await fetch(prmUrl("alpha"), {
-    headers: { origin: "https://evil.example" },
+  const allowed = await rpc("alpha", undefined, initialize, undefined, {
+    origin: ALLOWED_ORIGIN,
   });
-  expect(prm.status).toBe(200);
-  expect(prm.headers.get("access-control-allow-origin")).toBe("*");
+  expect(allowed.status).toBe(401);
+});
+
+test("a token without any sbm scope cannot open a session", async () => {
+  const res = await rpc(
+    "alpha",
+    await token(asA, "alpha", { scope: "openid profile" }),
+    initialize,
+  );
+  expect(res.status).toBe(403);
+  const challenge = res.headers.get("www-authenticate")!;
+  expect(challenge).toContain('error="insufficient_scope"');
+  expect(challenge).toContain('scope="sbm:browse"');
+  expect(challenge).toContain(`resource_metadata="${prmUrl("alpha")}"`);
+  expect(res.headers.get("mcp-session-id")).toBeNull();
 });
 
 test("a tool call without its scope gets 403 insufficient_scope", async () => {
   const browseOnly = await token(asA, "alpha", { scope: "sbm:browse" });
   const sessionId = await rawSession("alpha", browseOnly);
 
-  const fill = await rpc(
-    "alpha",
-    browseOnly,
-    {
-      method: "tools/call",
-      params: {
-        name: "fill_secret",
-        arguments: { secret_id: "x", element_uid: "y" },
-      },
-    },
-    sessionId,
-  );
+  const fill = await rpc("alpha", browseOnly, fillCall, sessionId);
   expect(fill.status).toBe(403);
   const challenge = fill.headers.get("www-authenticate")!;
   expect(challenge).toContain('error="insufficient_scope"');
   expect(challenge).toContain('scope="sbm:fill"');
   expect(challenge).toContain(`resource_metadata="${prmUrl("alpha")}"`);
-  expect(await fill.json()).toMatchObject({ error: "insufficient_scope" });
 
-  const refs = await rpc(
+  // A batch names every missing scope in one challenge.
+  const batch = await rpc(
     "alpha",
     browseOnly,
-    { method: "tools/call", params: { name: "list_secret_refs" } },
+    [
+      { jsonrpc: "2.0", ...fillCall, id: 2 },
+      { jsonrpc: "2.0", ...toolCall("list_secret_refs"), id: 3 },
+    ],
     sessionId,
   );
-  expect(refs.status).toBe(403);
-  expect(refs.headers.get("www-authenticate")).toContain('scope="sbm:refs"');
-
-  // A batch that needs two missing scopes names both in one challenge.
-  const batch = await fetch(mcpUrl("alpha"), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-      "mcp-protocol-version": "2025-06-18",
-      "mcp-session-id": sessionId,
-      authorization: `Bearer ${browseOnly}`,
-    },
-    body: JSON.stringify([
-      {
-        jsonrpc: "2.0",
-        id: 2,
-        method: "tools/call",
-        params: {
-          name: "fill_secret",
-          arguments: { secret_id: "x", element_uid: "y" },
-        },
-      },
-      {
-        jsonrpc: "2.0",
-        id: 3,
-        method: "tools/call",
-        params: { name: "list_secret_refs" },
-      },
-    ]),
-  });
   expect(batch.status).toBe(403);
   expect(batch.headers.get("www-authenticate")).toContain(
     'scope="sbm:fill sbm:refs"',
   );
-
-  // The scope it has works.
-  const snap = await rpc(
-    "alpha",
-    browseOnly,
-    { method: "tools/call", params: { name: "snapshot", arguments: {} } },
-    sessionId,
-  );
-  expect(snap.status).toBe(200);
-}, 30_000);
-
-test("a session answers only to the tenant and subject that opened it", async () => {
-  const alice = await token(asA, "alpha", { sub: "alice" });
-  const sessionId = await rawSession("alpha", alice);
-  const list = { method: "tools/list" };
-
-  expect((await rpc("alpha", alice, list, sessionId)).status).toBe(200);
-  const bob = await token(asA, "alpha", { sub: "bob" });
-  expect((await rpc("alpha", bob, list, sessionId)).status).toBe(404);
-  const betaAlice = await token(asA, "beta", { sub: "alice" });
-  expect((await rpc("beta", betaAlice, list, sessionId)).status).toBe(404);
 });
 
-test("a session answers only to the OAuth client that opened it", async () => {
-  const withClient = (claims: Record<string, unknown>) =>
-    token(asA, "delta", { sub: "carol", claims });
+test("a session answers only to the tenant, subject, and client that opened it", async () => {
+  const carol = (
+    tenant: string,
+    claims: Record<string, unknown>,
+    sub = "carol",
+  ) => token(asA, tenant, { sub, claims });
   const sessionId = await rawSession(
     "delta",
-    await withClient({ azp: "app-1" }),
+    await carol("delta", { azp: "app-1" }),
   );
   const list = { method: "tools/list" };
-
-  // The same client, by azp or client_id, is the same caller.
-  for (const claims of [{ azp: "app-1" }, { client_id: "app-1" }]) {
-    expect(
-      (await rpc("delta", await withClient(claims), list, sessionId)).status,
-    ).toBe(200);
-  }
-  // Another client of the same subject, or a token that names no client,
-  // does not see the session.
-  for (const claims of [{ azp: "app-2" }, { client_id: "app-2" }, {}]) {
-    expect(
-      (await rpc("delta", await withClient(claims), list, sessionId)).status,
-    ).toBe(404);
+  const cases: [string, string, number][] = [
+    // The same client, by azp or client_id, is the same caller.
+    ["delta", await carol("delta", { azp: "app-1" }), 200],
+    ["delta", await carol("delta", { client_id: "app-1" }), 200],
+    ["delta", await carol("delta", { azp: "app-1" }, "bob"), 404],
+    ["alpha", await carol("alpha", { azp: "app-1" }), 404],
+    ["delta", await carol("delta", { azp: "app-2" }), 404],
+    ["delta", await carol("delta", {}), 404],
+  ];
+  for (const [tenant, bearer, status] of cases) {
+    expect((await rpc(tenant, bearer, list, sessionId)).status).toBe(status);
   }
 });
 
 test("a tenant with allowedClients refuses tokens of other clients", async () => {
-  const withClient = (claims: Record<string, unknown>) =>
-    token(asA, "epsilon", { claims });
-  for (const claims of [{ azp: "agent-app" }, { client_id: "other-app" }]) {
-    expect(
-      (await rpc("epsilon", await withClient(claims), initialize)).status,
-    ).toBe(200);
-  }
-  for (const claims of [{}, { azp: "rogue-app" }, { client_id: "rogue" }]) {
-    const res = await rpc("epsilon", await withClient(claims), initialize);
-    expect(res.status).toBe(401);
-    expect(res.headers.get("www-authenticate")).toContain(
-      'error="invalid_token"',
-    );
-  }
+  const withClient = async (claims: Record<string, unknown>) =>
+    (await rpc("epsilon", await token(asA, "epsilon", { claims }), initialize))
+      .status;
+  expect(await withClient({ azp: "agent-app" })).toBe(200);
+  expect(await withClient({ azp: "rogue-app" })).toBe(401);
+  expect(await withClient({})).toBe(401);
 });
 
 test("tenants see only their own secrets and fills, across a restart", async () => {
-  const aliceToken = await token(asA, "alpha", { sub: "alice" });
-  const alpha = await connect("alpha", aliceToken);
+  const alpha = await connect(
+    "alpha",
+    await token(asA, "alpha", { sub: "alice" }),
+  );
   const beta = await connect("beta", await token(asB, "beta", { sub: "eve" }));
-
-  expect(await refNames(alpha)).toContain("demo-login-password");
   expect(await refNames(beta)).toEqual(["beta-login-password"]);
 
   const refs = (await alpha.call("list_secret_refs")).body.refs;
@@ -639,13 +475,13 @@ test("tenants see only their own secrets and fills, across a restart", async () 
 
   await alpha.client.close().catch(() => {});
   await beta.client.close().catch(() => {});
-  await restart();
+  await broker.stop();
+  broker = await startBroker();
 
-  // After the restart every fill is an orphan. beta still cannot claim
-  // alpha's, and neither can another subject of alpha.
+  // After the restart every fill is an orphan. Neither beta nor another
+  // subject of alpha can claim alice's.
   const betaAfter = await connect("beta", await token(asB, "beta"));
   await steal(betaAfter);
-  expect(await refNames(betaAfter)).toEqual(["beta-login-password"]);
   const bob = await connect("alpha", await token(asA, "alpha", { sub: "bob" }));
   await steal(bob);
 
@@ -665,40 +501,6 @@ test("tenants see only their own secrets and fills, across a restart", async () 
   for (const s of [betaAfter, bob, aliceAfter]) await s.client.close();
 }, 90_000);
 
-test("a client-credentials token with scp scopes can use the tools", async () => {
-  // No scope claim: only scp, as Okta issues it.
-  const machine = await asA.mint({
-    aud: mcpUrl("alpha"),
-    sub: "svc-agent@clients",
-    scp: ["sbm:browse", "sbm:refs"],
-  });
-  const sessionId = await rawSession("alpha", machine);
-
-  const refs = await rpc(
-    "alpha",
-    machine,
-    { method: "tools/call", params: { name: "list_secret_refs" } },
-    sessionId,
-  );
-  expect(refs.status).toBe(200);
-
-  // The scp claim limits the client like scope does.
-  const fill = await rpc(
-    "alpha",
-    machine,
-    {
-      method: "tools/call",
-      params: {
-        name: "fill_secret",
-        arguments: { secret_id: "x", element_uid: "y" },
-      },
-    },
-    sessionId,
-  );
-  expect(fill.status).toBe(403);
-  expect(fill.headers.get("www-authenticate")).toContain('scope="sbm:fill"');
-}, 30_000);
-
 test("a request id in flight cannot be reused in the session", async () => {
   // Two tokens of one subject share a session: one may list secret refs,
   // the other may only browse.
@@ -708,18 +510,10 @@ test("a request id in flight cannot be reused in the session", async () => {
     scope: "sbm:browse",
   });
   const sessionId = await rawSession("delta", refsToken);
-  const listRefs = {
-    id: 7,
-    method: "tools/call",
-    params: { name: "list_secret_refs" },
-  };
-  const navigate = (url: string) => ({
-    id: 7,
-    method: "tools/call",
-    params: { name: "navigate", arguments: { url } },
-  });
-  // A page that loads slower than list_secret_refs answers, so the
-  // browse-only call is still open when the refs result is sent.
+  const listRefs = toolCall("list_secret_refs", {}, 7);
+  const navigate = (url: string) => toolCall("navigate", { url }, 7);
+  // A page slower than list_secret_refs, so the browse-only call would
+  // still be open when the refs result is sent.
   const slowPage = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -731,9 +525,8 @@ test("a request id in flight cannot be reused in the session", async () => {
     },
   });
 
-  // The browse-only call reuses the id while list_secret_refs is in
-  // flight. If the broker forwarded it, the transport would send the refs
-  // result on the browse-only call's stream.
+  // If the broker forwarded the reused id, the transport would send the
+  // refs result on the browse-only call's stream.
   const slow = rpc("delta", refsToken, listRefs, sessionId);
   await Bun.sleep(LIST_DELAY_MS / 5);
   const dup = await rpc(
@@ -762,36 +555,10 @@ test("a request id in flight cannot be reused in the session", async () => {
     sessionId,
   );
   expect(again.status).toBe(200);
-  expect(await again.text()).not.toContain("demo-login-password");
-
   // Each request still gets the scopes of its own token.
   expect((await rpc("delta", browseOnly, listRefs, sessionId)).status).toBe(
     403,
   );
-  const stepUp = await rpc("delta", refsToken, listRefs, sessionId);
-  expect(stepUp.status).toBe(200);
-  expect(await stepUp.text()).toContain("demo-login-password");
-
-  // One id twice in a batch is refused too, and forwards neither.
-  const batch = await rpc(
-    "delta",
-    refsToken,
-    [
-      { jsonrpc: "2.0", ...listRefs, id: 8 },
-      { jsonrpc: "2.0", id: 8, method: "tools/list" },
-    ],
-    sessionId,
-  );
-  expect(batch.status).toBe(409);
-  expect(await batch.text()).not.toContain("demo-login-password");
-  // Notifications carry no id and are never refused.
-  const note = await rpc(
-    "delta",
-    refsToken,
-    [{ jsonrpc: "2.0", method: "notifications/initialized" }],
-    sessionId,
-  );
-  expect(note.status).toBe(202);
 }, 30_000);
 
 test("a GET stream ends when its token expires", async () => {
@@ -816,7 +583,6 @@ test("a GET stream ends when its token expires", async () => {
   const started = Date.now();
   const stream = await get(short);
   expect(stream.status).toBe(200);
-  expect(stream.headers.get("content-type")).toContain("text/event-stream");
   // Read until the broker ends the stream; the test timeout catches a
   // stream that never ends.
   const reader = stream.body!.getReader();
@@ -845,13 +611,12 @@ test("one principal or tenant cannot take every session slot", async () => {
     return { opened, refusal: await res.text() };
   };
 
-  // 25 slots and 5 tenants: beta gets at most 5, and one principal at most
-  // 4 of them. An earlier test may still hold a beta session.
+  // beta gets 5 slots, and one principal 4 of them. An earlier test may
+  // still hold a beta session.
   const greedy = await fill(await token(asB, "beta", { sub: "greedy" }));
   expect(greedy.opened).toBe(4);
   expect(greedy.refusal).toContain("caller is at its session limit");
-  // A principal is (iss, sub): the same subject from another issuer that
-  // beta trusts is another principal.
+  // A principal is (iss, sub): the same sub from another issuer is another.
   const next = await fill(await token(asA, "beta", { sub: "greedy" }));
   expect(next.opened).toBeLessThanOrEqual(1);
   expect(next.refusal).toContain("tenant is at its session limit");

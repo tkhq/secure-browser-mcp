@@ -1,11 +1,6 @@
 /**
  * Tenant configuration for the hosted broker (docs/HOSTED.md, "Tenants").
- *
- * The file named by SBM_TENANTS is deployment config, never part of this
- * repo. It names, for each tenant, which Turnkey organization the tenant's
- * fills come from, where the broker finds that organization's API key, and
- * which authorization servers may issue tokens for the tenant. The file
- * holds references to keys, not keys.
+ * The file holds references to keys, never keys.
  */
 import { readFileSync } from "node:fs";
 
@@ -44,11 +39,8 @@ const issuerSchema = z
   })
   .strict();
 
-/**
- * A Turnkey API key, by reference: either two environment variables or a
- * JSON file (`{"publicKey": "...", "privateKey": "..."}`) in a secrets
- * mount.
- */
+/** A Turnkey API key by reference: two environment variables, or a JSON
+ * file `{"publicKey", "privateKey"}` in a secrets mount. */
 const apiKeySchema = z.union([
   z
     .object({
@@ -72,19 +64,10 @@ const common = {
   issuers: z.array(issuerSchema).min(1),
   /** Advertised in Protected Resource Metadata. Defaults to the issuers. */
   authorizationServers: z.array(url).min(1).optional(),
-  /**
-   * The `aud` this tenant's tokens carry, for an authorization server that
-   * cannot put the resource URI there (for example Entra ID's
-   * `api://<app id>`). Defaults to the resource URI. The check stays exact
-   * and single-valued, and no two tenants may share an audience.
-   */
+  /** The exact `aud`, when it cannot be the resource URI (Entra ID's
+   * `api://<app id>`). Must be unique across tenants (checkAudiences). */
   audience: z.string().min(1).optional(),
-  /**
-   * The OAuth clients whose tokens this tenant accepts, by the token's
-   * `azp` (else `client_id`). Without it, the tenant trusts every client
-   * its authorization servers issue tokens to, including dynamically
-   * registered ones.
-   */
+  /** Accepted clients, by `azp` else `client_id`. Default: every client. */
   allowedClients: z.array(z.string().min(1)).min(1).optional(),
 };
 
@@ -104,6 +87,8 @@ const tenantSchema = z.discriminatedUnion("backend", [
       ...common,
       backend: z.literal("mock"),
       mockSecrets: z.array(mockSecretSchema).optional(),
+      /** Tests only: how long listing secrets takes. */
+      listDelayMs: z.number().int().positive().optional(),
     })
     .strict(),
 ]);
@@ -127,7 +112,6 @@ const fileSchema = z
 
 export type TenantConfig = z.infer<typeof tenantSchema>;
 export type TrustedIssuer = z.infer<typeof issuerSchema>;
-export type MockSecretSeed = z.infer<typeof mockSecretSchema>;
 
 /** Parse and check a tenants document. Throws with every problem found. */
 export function parseTenants(raw: unknown): TenantConfig[] {
@@ -201,15 +185,9 @@ export function parsePublicUrl(value: string): string {
   return parsed.origin;
 }
 
-/** The tenant's MCP endpoint path. */
-export function tenantPath(id: string): string {
-  return `/t/${id}/mcp`;
-}
-
-/** RFC 8707 resource indicator for the tenant, and its default token
- * audience. */
+/** RFC 8707 resource indicator, and the default token audience. */
 export function resourceUri(publicUrl: string, id: string): string {
-  return `${publicUrl}${tenantPath(id)}`;
+  return `${publicUrl}/t/${id}/mcp`;
 }
 
 /** The exact `aud` the tenant's tokens must carry. */
@@ -220,11 +198,8 @@ export function tenantAudience(
   return tenant.audience ?? resourceUri(publicUrl, tenant.id);
 }
 
-/**
- * Refuse a config in which two tenants accept the same audience. The
- * audience is what keeps a token for one tenant from working at another
- * that trusts the same issuer, so it must be unique.
- */
+/** Refuse two tenants with one audience: the audience is what keeps one
+ * tenant's token from working at another that trusts the same issuer. */
 export function checkAudiences(
   publicUrl: string,
   tenants: readonly TenantConfig[],
@@ -242,11 +217,7 @@ export function checkAudiences(
   }
 }
 
-/** RFC 9728 §3.1: the well-known path inserted before the resource path. */
-export function metadataPath(id: string): string {
-  return `/.well-known/oauth-protected-resource${tenantPath(id)}`;
-}
-
+/** RFC 9728 §3.1: the well-known path goes before the resource path. */
 export function metadataUri(publicUrl: string, id: string): string {
-  return `${publicUrl}${metadataPath(id)}`;
+  return `${publicUrl}/.well-known/oauth-protected-resource/t/${id}/mcp`;
 }

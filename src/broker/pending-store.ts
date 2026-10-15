@@ -13,18 +13,15 @@
  *    from the deployment (SBM_STATE_KEY), never from the state directory.
  *
  * Every fill has an owner, the agent session that parked it, and a
- * principal, the caller that session speaks for (in the hosted broker, a
- * token's issuer and subject). Tools only see their own session's fills
- * through `scopedFills`. A fill whose owner session no longer exists (the
- * broker restarted, or the client reconnected) can be claimed by another
- * session of the same principal that presents its fill_id. The fill_id is a
- * random UUID the broker gave only to the original session, so presenting
- * it is the proof of ownership; the principal check keeps a leaked id from
- * working for anyone else.
+ * principal, the caller that session speaks for (hosted: the token's iss
+ * and sub). Tools see only their own session's fills through `scopedFills`.
+ * A fill whose owner session is gone (restart, reconnect) can be claimed by
+ * another session of the same principal that presents its fill_id. The
+ * fill_id is a random UUID the broker gave only to the original session;
+ * the principal check keeps a leaked id from working for anyone else.
  *
- * The hosted broker keeps one store per tenant, each in its own directory
- * under its own key (`tenantStateKey`), so no tenant's session can reach
- * another tenant's fills.
+ * The hosted broker keeps one store per tenant, in its own directory under
+ * its own key (`tenantStateKey`).
  */
 import {
   createCipheriv,
@@ -203,11 +200,8 @@ export function parseStateKey(value: string): Buffer {
   return key;
 }
 
-/**
- * A tenant's state key: HKDF-SHA256 of SBM_STATE_KEY with the tenant id as
- * context. Keys for different tenants are independent, so one tenant's
- * files do not decrypt under another tenant's key.
- */
+/** A tenant's state key: HKDF-SHA256 of SBM_STATE_KEY with the tenant id
+ * as context, so one tenant's files do not decrypt under another's key. */
 export function tenantStateKey(master: Buffer, tenantId: string): Buffer {
   return Buffer.from(
     hkdfSync(

@@ -4,7 +4,7 @@ The hosted broker serves the same MCP tools over Streamable HTTP, so an agent pl
 
 This is a Turnkey-operated fill service. The broker runs on our infrastructure and decrypts each secret before it sends the value to the browser. By default the browsers run on Browserbase, so secret plaintext exists in the broker process and in the Browserbase browser during a fill. Read the [hosted section of the threat model](THREAT-MODEL.md#hosted-broker) before you describe this service to a customer.
 
-The broker serves one MCP endpoint per tenant, `/t/{tenant}/mcp`, and is an OAuth 2.1 resource server for each, as the MCP authorization spec describes. A tenant's agents present access tokens from the tenant's own authorization server. A tenant's sessions use the tenant's own Turnkey organization and API key, and its parked fills are encrypted under its own key.
+The broker serves one MCP endpoint per tenant, `/t/{tenant}/mcp`, and is an OAuth 2.1 resource server for each, as MCP authorization describes. Each tenant has its own authorization server, Turnkey organization and API key, and key for parked fills.
 
 ## Run it locally
 
@@ -22,7 +22,7 @@ Keep `SBM_STATE_KEY` stable across restarts. A different key cannot read the par
 
 ### Development: one shared token
 
-Without an authorization server at hand, set `SBM_DEV_SHARED_TOKEN=1` and `SBM_HTTP_TOKEN`. The broker then also serves `/mcp` for any client that sends `Authorization: Bearer <SBM_HTTP_TOKEN>`, with every scope, using the `TURNKEY_*` key (or the mock backend). It logs a warning at startup. `SBM_HTTP_TOKEN` without the flag stops the broker from starting, so a step-1 deployment cannot keep running on the shared token by accident. Do not use this mode in production; the container image does not set the flag.
+Without an authorization server, set `SBM_DEV_SHARED_TOKEN=1` and `SBM_HTTP_TOKEN`. The broker then also serves `/mcp` to any client that sends that bearer token, with every scope and the `TURNKEY_*` key (or the mock backend). `SBM_HTTP_TOKEN` without the flag stops the broker at startup. Do not use this in production. The image does not set the flag.
 
 ```sh
 SBM_DEV_SHARED_TOKEN=1 SBM_HTTP_TOKEN="$(openssl rand -hex 32)" bun run serve
@@ -30,35 +30,34 @@ SBM_DEV_SHARED_TOKEN=1 SBM_HTTP_TOKEN="$(openssl rand -hex 32)" bun run serve
 
 ## Configuration
 
-| Variable                         | Default           | Purpose                                                                                                                                                                                                                                                                                         |
-| -------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SBM_TENANTS`                    | (none)            | Path to the tenant file. The image sets `/etc/sbm/tenants.json`; mount the file there.                                                                                                                                                                                                          |
-| `SBM_PUBLIC_URL`                 | (required)        | The origin clients reach the broker at, such as `https://sbm.example.com`. Token audiences are built from it.                                                                                                                                                                                   |
-| `SBM_DEV_SHARED_TOKEN`           | (off)             | `1` serves `/mcp` with `SBM_HTTP_TOKEN`. Development only.                                                                                                                                                                                                                                      |
-| `SBM_HTTP_TOKEN`                 | (none)            | The shared token for `SBM_DEV_SHARED_TOKEN`.                                                                                                                                                                                                                                                    |
-| `SBM_HTTP_HOST`                  | `127.0.0.1`       | Listen address. The container image sets `0.0.0.0`.                                                                                                                                                                                                                                             |
-| `SBM_HTTP_PORT`                  | `8080`            | Listen port.                                                                                                                                                                                                                                                                                    |
-| `SBM_STATE_DIR`                  | (none)            | Directory for parked fills. Without it, a restart strands every pending approval.                                                                                                                                                                                                               |
-| `SBM_STATE_KEY`                  | (none)            | 32-byte key, 64 hex characters or base64. Required with `SBM_STATE_DIR`. Each tenant's key is derived from it.                                                                                                                                                                                  |
-| `TURNKEY_SIGNER_PUBLIC_KEY`      | (SDK default)     | Enclave quorum key that signs secret bundles. Required when `TURNKEY_API_BASE_URL` points at a Turnkey environment with its own enclaves; production needs nothing. Applies to every tenant.                                                                                                    |
-| `SBM_BROWSER`                    | `local`           | Where session browsers run: `local` (Chrome on this host) or `browserbase`. The image sets `browserbase`.                                                                                                                                                                                       |
-| `BROWSERBASE_API_KEY`            | (none)            | Required with `SBM_BROWSER=browserbase`.                                                                                                                                                                                                                                                        |
-| `BROWSERBASE_PROJECT_ID`         | (first project)   | Browserbase project for sessions.                                                                                                                                                                                                                                                               |
-| `SBM_BROWSERBASE_TIMEOUT_S`      | (project default) | Maximum Browserbase session length, in seconds.                                                                                                                                                                                                                                                 |
-| `SBM_MAX_SESSIONS`               | `8`               | Concurrent agent sessions. Each session gets its own browser. On Browserbase, keep this at or below the plan's concurrency limit.                                                                                                                                                               |
-| `SBM_MAX_SESSIONS_PER_TENANT`    | (equal share)     | Concurrent sessions per tenant. Defaults to `SBM_MAX_SESSIONS` divided by the number of tenants (the dev `/mcp` endpoint counts as one), so one tenant cannot hold every slot.                                                                                                                  |
-| `SBM_MAX_SESSIONS_PER_PRINCIPAL` | `4` (or less)     | Concurrent sessions per principal (token `iss` and `sub`) in one tenant. Defaults to 4, or to the per-tenant limit if that is lower, so one user or machine client cannot hold every slot of its tenant. The development `/mcp` endpoint has one principal, so this limit does not apply to it. |
-| `SBM_SESSION_IDLE_S`             | `1800`            | The broker closes a session, and its browser, after this many idle seconds.                                                                                                                                                                                                                     |
-| `SBM_CHROME_ARGS`                | (none)            | Local Chrome only. Extra Chrome flags, separated by spaces.                                                                                                                                                                                                                                     |
-| `SBM_ALLOWED_ORIGINS`            | (none)            | Browser origins that may call the MCP endpoints, separated by commas. Any other `Origin` header gets `403`. See [Origin check](#origin-check).                                                                                                                                                  |
+| Variable                         | Default           | Purpose                                                                                                                                                                                      |
+| -------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SBM_TENANTS`                    | (none)            | Path to the tenant file. The image sets `/etc/sbm/tenants.json`; mount the file there.                                                                                                       |
+| `SBM_PUBLIC_URL`                 | (required)        | The origin clients reach the broker at, such as `https://sbm.example.com`. Token audiences are built from it.                                                                                |
+| `SBM_DEV_SHARED_TOKEN`           | (off)             | `1` serves `/mcp` with the shared token `SBM_HTTP_TOKEN`. Development only.                                                                                                                  |
+| `SBM_HTTP_HOST`                  | `127.0.0.1`       | Listen address. The container image sets `0.0.0.0`.                                                                                                                                          |
+| `SBM_HTTP_PORT`                  | `8080`            | Listen port.                                                                                                                                                                                 |
+| `SBM_STATE_DIR`                  | (none)            | Directory for parked fills. Without it, a restart strands every pending approval.                                                                                                            |
+| `SBM_STATE_KEY`                  | (none)            | 32-byte key, 64 hex characters or base64. Required with `SBM_STATE_DIR`. Each tenant's key is derived from it.                                                                               |
+| `TURNKEY_SIGNER_PUBLIC_KEY`      | (SDK default)     | Enclave quorum key that signs secret bundles. Required when `TURNKEY_API_BASE_URL` points at a Turnkey environment with its own enclaves; production needs nothing. Applies to every tenant. |
+| `SBM_BROWSER`                    | `local`           | Where session browsers run: `local` (Chrome on this host) or `browserbase`. The image sets `browserbase`.                                                                                    |
+| `BROWSERBASE_API_KEY`            | (none)            | Required with `SBM_BROWSER=browserbase`.                                                                                                                                                     |
+| `BROWSERBASE_PROJECT_ID`         | (first project)   | Browserbase project for sessions.                                                                                                                                                            |
+| `SBM_BROWSERBASE_TIMEOUT_S`      | (project default) | Maximum Browserbase session length, in seconds.                                                                                                                                              |
+| `SBM_MAX_SESSIONS`               | `8`               | Concurrent agent sessions. Each session gets its own browser. On Browserbase, keep this at or below the plan's concurrency limit.                                                            |
+| `SBM_MAX_SESSIONS_PER_TENANT`    | (equal share)     | Concurrent sessions per tenant. The default is `SBM_MAX_SESSIONS` divided by the number of tenants (the dev `/mcp` endpoint counts as one).                                                  |
+| `SBM_MAX_SESSIONS_PER_PRINCIPAL` | `4`               | Concurrent sessions per principal (`iss` and `sub`) in one tenant. The default is never more than the per-tenant limit. Does not apply to the dev `/mcp` endpoint.                           |
+| `SBM_SESSION_IDLE_S`             | `1800`            | The broker closes a session, and its browser, after this many idle seconds.                                                                                                                  |
+| `SBM_CHROME_ARGS`                | (none)            | Local Chrome only. Extra Chrome flags, separated by spaces.                                                                                                                                  |
+| `SBM_ALLOWED_ORIGINS`            | (none)            | Browser origins that may call the MCP endpoints, separated by commas. Any other `Origin` header gets `403`. See [Origin check](#origin-check).                                               |
 
-`TURNKEY_API_BASE_URL` and the browser `SBM_*` variables work as in the stdio broker. The `TURNKEY_API_*` key and `TURNKEY_ORGANIZATION_ID` are used only by the development `/mcp` endpoint; tenants name their own.
+`TURNKEY_API_BASE_URL` and the browser `SBM_*` variables work as in the stdio broker. Only the dev `/mcp` endpoint uses `TURNKEY_API_*` and `TURNKEY_ORGANIZATION_ID`.
 
 `GET /healthz` returns `{"ok":true,"tenants":<count>}` without authentication.
 
 ## Tenants
 
-`SBM_TENANTS` names a JSON file. It is deployment configuration: keep it out of this repository and out of the state volume. It holds references to keys, never keys.
+`SBM_TENANTS` names a JSON file of deployment configuration. Keep it out of this repository and out of the state volume. It holds references to keys, never keys.
 
 ```json
 {
@@ -76,50 +75,40 @@ SBM_DEV_SHARED_TOKEN=1 SBM_HTTP_TOKEN="$(openssl rand -hex 32)" bun run serve
           "jwksUri": "https://login.acme.com/.well-known/jwks.json"
         }
       ]
-    },
-    {
-      "id": "globex",
-      "organizationId": "<Turnkey sub-organization id>",
-      "apiKey": { "path": "/run/secrets/globex-turnkey.json" },
-      "issuers": [
-        {
-          "issuer": "https://globex.okta.com/oauth2/default",
-          "jwksUri": "https://globex.okta.com/oauth2/default/v1/keys"
-        }
-      ],
-      "authorizationServers": ["https://globex.okta.com/oauth2/default"]
     }
   ]
 }
 ```
 
-| Field                  | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `id`                   | Lowercase letters, digits, and dashes. Appears in the endpoint URL and the state directory.                                                                                                                                                                                                                                                                                                                                          |
-| `organizationId`       | The tenant's Turnkey organization (usually a sub-organization). Every secret the tenant's sessions list or fill comes from here.                                                                                                                                                                                                                                                                                                     |
-| `apiKey`               | The Turnkey API key the broker uses for this tenant: two environment variable names, or `path` to a JSON file `{"publicKey": "...", "privateKey": "..."}` in a secrets mount. The broker reads it at startup.                                                                                                                                                                                                                        |
-| `issuers`              | The authorization servers whose tokens this tenant accepts: the exact `iss` value and the JWKS URI. HTTPS only (HTTP is accepted for `localhost`). Set `"requireTyp": true` on an issuer to also require the `typ: at+jwt` header (RFC 9068). It is off by default, because many servers do not set it.                                                                                                                              |
-| `audience`             | Optional. The exact `aud` that the tenant's tokens carry, for an authorization server that cannot put the resource URI there (for example Entra ID's `api://<app id>`). Defaults to the tenant's resource URI. The check stays exact and single-valued. Two tenants cannot have the same audience; the broker does not start if they do.                                                                                             |
-| `allowedClients`       | Optional. The OAuth client ids whose tokens this tenant accepts. The broker reads the client from `azp`, or from `client_id` if there is no `azp`. A token from another client, or a token that names no client, gets `401 invalid_token`. Without this field, the tenant accepts tokens of every client that its authorization servers issue tokens to, including clients that registered themselves (dynamic client registration). |
-| `authorizationServers` | Optional. What the Protected Resource Metadata advertises. Defaults to the `issuer` values.                                                                                                                                                                                                                                                                                                                                          |
-| `backend`              | Optional. `"turnkey"` (default) or `"mock"`. A mock tenant has in-memory secrets (`mockSecrets`, or the demo seed) and logs a warning. Development and tests only.                                                                                                                                                                                                                                                                   |
+| Field                  | Meaning                                                                                                                                                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                   | Lowercase letters, digits, and dashes. Used in the endpoint URL and the state directory.                                                                                                                         |
+| `organizationId`       | The tenant's Turnkey organization. Every secret the tenant's sessions see comes from it.                                                                                                                         |
+| `apiKey`               | The tenant's Turnkey API key: `publicKeyEnv` and `privateKeyEnv` (environment variable names), or `path` to a JSON file `{"publicKey": "...", "privateKey": "..."}`.                                             |
+| `issuers`              | The authorization servers whose tokens the tenant accepts: the exact `issuer` and its `jwksUri`. HTTPS only (HTTP for `localhost`). `"requireTyp": true` also requires the `typ: at+jwt` header.                 |
+| `audience`             | Optional. The exact `aud` of the tenant's tokens, when the server cannot use the resource URI (Entra ID's `api://<app id>`). The default is the resource URI. Two tenants cannot share an audience.              |
+| `allowedClients`       | Optional. Client ids (`azp`, else `client_id`) whose tokens the tenant accepts. Without it, the tenant accepts every client its authorization servers issue tokens to, including dynamically registered clients. |
+| `authorizationServers` | Optional. What the Protected Resource Metadata advertises. The default is the `issuer` values.                                                                                                                   |
+| `backend`              | Optional. `"turnkey"` (default) or `"mock"`: in-memory `mockSecrets`, for development and tests only.                                                                                                            |
 
-Give each tenant its own API key, scoped by Turnkey policy to its own organization: the broker keeps tenants apart by never using one tenant's key for another, and Turnkey policy is what stops a key from reaching further. Approvals stay in Turnkey policy, as with the stdio broker.
+Give each tenant its own API key, scoped by Turnkey policy to its own organization. The broker never uses one tenant's key for another; Turnkey policy stops a key from reaching further. Approvals stay in Turnkey policy.
 
-The broker reads the file once at startup. Restart it to add or change a tenant. The broker also resolves every tenant's API key at startup, so one missing or unreadable key stops the whole broker, and no tenant is served. To rotate a tenant's API key, update the key and restart the broker.
+The broker reads the file and resolves every API key at startup. One missing key stops the broker. Restart it to add a tenant or rotate a key.
 
 ### Set up the tenant's authorization server
 
-The tenant's authorization server must issue JWT access tokens whose `aud` is the tenant's resource URI (or the tenant's `audience`), and nothing else. Many servers add other audiences by default. The broker refuses a token with more than one audience.
+The server must issue JWT access tokens whose `aud` is the tenant's resource URI (or `audience`) and nothing else. Many servers add other audiences by default, and the broker refuses a token with more than one.
 
-**Keycloak.** Keycloak access tokens include the `account` audience by default. Do these steps for the client that the agent uses:
+**Keycloak.** Access tokens include the `account` audience by default. For the agent's client:
 
-1. Add an **Audience** mapper to the client (or to a client scope that the client uses). Set **Included Custom Audience** to the tenant's resource URI, for example `https://sbm.example.com/t/acme/mcp`. Turn on **Add to access token**.
-2. Remove the `account` audience. In the client's **Client scopes** tab, remove the `roles` client scope from the client, or remove its **audience resolve** mapper. Another way is to remove the `account` client roles from the realm's default roles. Without this, `aud` is `["account", "<resource URI>"]` and the broker refuses the token.
+1. Add an **Audience** mapper to the client or one of its client scopes. Set **Included Custom Audience** to the resource URI, such as `https://sbm.example.com/t/acme/mcp`, and turn on **Add to access token**.
+2. Remove the `account` audience: remove the `roles` client scope from the client, or its **audience resolve** mapper, or the `account` client roles from the realm's default roles. Otherwise `aud` is `["account", "<resource URI>"]`.
 3. Add the client scopes `sbm:browse`, `sbm:fill`, and `sbm:refs`, and assign them to the client.
-4. Get a token and decode it. `aud` must be the resource URI alone.
+4. Decode a token. `aud` must be the resource URI alone.
 
-The issuer is `https://<keycloak host>/realms/<realm>`, and the JWKS URI is `https://<keycloak host>/realms/<realm>/protocol/openid-connect/certs`.
+The issuer is `https://<keycloak host>/realms/<realm>`. The JWKS URI is `https://<keycloak host>/realms/<realm>/protocol/openid-connect/certs`.
+
+**Entra ID.** Entra ID cannot put the resource URI in `aud`: set the tenant's `audience` to the app's `api://<app id>`. Its access tokens have `typ: JWT`, so leave `requireTyp` off. Expose the `sbm:*` scopes as delegated scopes; they arrive in `scp`. The broker does not read app roles (`roles`).
 
 ## Authorization
 
@@ -130,25 +119,23 @@ For a tenant `acme` behind `SBM_PUBLIC_URL=https://sbm.example.com`:
 | MCP endpoint, and the resource (RFC 8707) | `https://sbm.example.com/t/acme/mcp`                                      |
 | Protected Resource Metadata (RFC 9728)    | `https://sbm.example.com/.well-known/oauth-protected-resource/t/acme/mcp` |
 
-The metadata document lists `resource`, `authorization_servers`, `scopes_supported`, and `bearer_methods_supported: ["header"]`. It needs no authentication, and the [Origin check](#origin-check) does not apply to it.
+The metadata needs no authentication.
 
 **Tokens.** Each request carries `Authorization: Bearer <access token>`. The broker accepts a signed JWT access token only when:
 
 - `iss` is exactly one of the tenant's `issuers`,
 - the signature verifies against that issuer's JWKS with RS256, PS256, ES256, ES384, or EdDSA,
-- `aud` is exactly the tenant's resource URI, or the tenant's `audience` if it has one (a single audience; a token that also names other audiences is refused),
+- `aud` is exactly the tenant's resource URI (or `audience`), with no other audience,
 - the header has `typ: at+jwt`, if the issuer has `requireTyp`,
-- `exp` is present and not past, and `nbf`, if present, is not in the future, each with 30 seconds of clock skew,
-- `exp` is at most 24 hours after now, and at most 24 hours after `iat` if the token has one,
-- there is no `nonce` or `at_hash` claim. These claims mark an OpenID Connect ID token, and an ID token is not an access token. The broker does not use `typ` for this check, because Entra ID and other servers send `typ: JWT` on access tokens too,
+- `exp` is present and not past, and `nbf`, if present, is not in the future, with 30 seconds of clock skew,
+- `exp` is at most 24 hours after now, and at most 24 hours after `iat` if present,
+- there is no `nonce` or `at_hash` claim (these mark an OpenID Connect ID token),
 - `sub` is present,
-- the client (`azp`, else `client_id`) is in the tenant's `allowedClients`, if the tenant has that list.
+- the client (`azp`, else `client_id`) is in `allowedClients`, if the tenant has that list.
 
-The broker reads scopes from `scope` (a space-separated string, as RFC 9068 says) and from `scp` (a string or an array of strings, as Okta issues). If a token has both, the broker uses all of them.
+Scopes come from `scope` (space-separated) and `scp` (a string or an array, as Okta issues), merged. A client-credentials token works if it meets the same rules; its `sub` is usually the client id. The broker does not accept opaque tokens or refresh tokens.
 
-**Client credentials.** A machine client can use the client credentials grant. The broker does not check how a token was issued. The token must meet the same rules: the tenant's resource URI as `aud`, a `sub` (usually the client ID), and the scopes the client needs. Every session that the client opens has the same principal, so any of them can claim a fill that another one parked. The broker does not accept opaque tokens, and it does not read Entra ID app roles (`roles`).
-
-The broker caches each JWKS for 10 minutes and fetches it again when a token names a key id it does not have (at most once every 30 seconds). If the JWKS cannot be fetched, the token is refused. The broker does not introspect opaque tokens and does not accept refresh tokens; the client refreshes with its authorization server. Tokens go nowhere but the validator: not to Turnkey, not to Browserbase, and not to the logs.
+The broker caches each JWKS for 10 minutes and refetches it, at most every 30 seconds, for an unknown key id. If the JWKS cannot be fetched, the token is refused. Tokens are not sent to Turnkey or Browserbase and are not logged.
 
 **Scopes.** Each tool needs one scope:
 
@@ -158,14 +145,14 @@ The broker caches each JWKS for 10 minutes and fetches it again when a token nam
 | `sbm:fill`   | `fill_secret`, `await_fill`                                           |
 | `sbm:refs`   | `list_secret_refs`                                                    |
 
-Opening a session needs a valid token with at least one of these scopes, any one of them. A token with none gets `403 insufficient_scope`. The challenge names `scope="sbm:browse"` only, because every useful session drives the browser; the client asks for the other scopes when a tool call needs them. Listing tools needs nothing more. An agent that fills secrets needs all three scopes. The broker checks scopes on every request against the token sent with it, so a client that steps up its token gets the new scopes in the same session.
+Opening a session needs at least one of these scopes; without one, the broker answers `403 insufficient_scope` with `scope="sbm:browse"`. Listing tools needs nothing more. An agent that fills secrets needs all three. The broker checks scopes on every request against that request's token, so a client that steps up its token gets the new scopes in the same session.
 
 **Errors.**
 
-- No token, or an invalid one: `401` with `WWW-Authenticate: Bearer error="invalid_token", scope="sbm:browse sbm:fill sbm:refs", resource_metadata="<metadata URL>"` (no `error` when the request had no token, or used a scheme other than `Bearer`). MCP clients follow `resource_metadata` to find the authorization server.
-- A malformed `Bearer` header (no token, more than one value, or characters a bearer token cannot have): `400` with `error="invalid_request"`, the same `scope`, and `resource_metadata`.
-- A tool call without the tool's scope: `403` with `WWW-Authenticate: Bearer error="insufficient_scope", scope="<the scope the tool needs>", resource_metadata="..."`. A batch that calls several tools names every missing scope in one challenge.
-- A request that reuses a JSON-RPC id already in flight in its session, or a batch that has one id twice: `409` with JSON-RPC error `-32600`. See [Sessions](#sessions).
+- No token, or an invalid one: `401` with `WWW-Authenticate: Bearer error="invalid_token", scope="sbm:browse sbm:fill sbm:refs", resource_metadata="<metadata URL>"`. There is no `error` when the request has no `Bearer` credentials. MCP clients follow `resource_metadata` to the authorization server.
+- A malformed `Bearer` header: `400` with `error="invalid_request"`.
+- A tool call without its scope: `403` with `error="insufficient_scope"` and the missing scopes. A batch names every missing scope in one challenge.
+- A JSON-RPC id already in flight in the session, or one id twice in a batch: `409` with JSON-RPC error `-32600`.
 - An unknown tenant: `404`.
 - The broker, the tenant, or the principal at its session limit: `503`.
 
@@ -187,7 +174,7 @@ The hosted browser runs on the broker host. `localhost` in a URL refers to that 
 
 ## Origin check
 
-The MCP Streamable HTTP spec requires the server to check the `Origin` header. This stops a web page in a user's browser from calling the broker, for example through DNS rebinding. The check applies to every MCP endpoint: each tenant's `/t/{tenant}/mcp`, and `/mcp` in shared-token development mode.
+The MCP Streamable HTTP spec requires the server to check the `Origin` header. This stops a web page in a user's browser from calling the broker, for example through DNS rebinding. The check applies to every MCP endpoint.
 
 - A request without an `Origin` header passes. Non-browser MCP clients (Hermes, Claude Code, the SDK clients) do not send one.
 - A request with an `Origin` header passes only if the value is in `SBM_ALLOWED_ORIGINS`. The match is exact: scheme, host, and port. The browser's opaque origin `null` never matches.
@@ -198,7 +185,7 @@ Each entry must be a bare origin (`scheme://host[:port]`, no path). The broker d
 
 An allowed origin does not replace the bearer token. The broker does not send CORS headers on the MCP endpoints yet, so a browser page on an allowed origin still cannot read responses.
 
-The Protected Resource Metadata paths are not checked. The document is public: it holds no credentials and nothing that the `401` challenge does not already point to. A browser-based client must be able to read it from another origin, so the broker serves it to `GET` with `Access-Control-Allow-Origin: *` and no credentials. A rebound page can read it, but it learns nothing it could not fetch directly.
+The Protected Resource Metadata is not checked. It is public, and browser-based clients read it from other origins, so the broker serves it with `Access-Control-Allow-Origin: *`.
 
 ## Protocol versions
 
@@ -232,16 +219,16 @@ A client that negotiates the version (MCP TypeScript SDK v2 `versionNegotiation:
 ## Sessions
 
 - Each MCP session gets its own browser (a local Chrome process with a fresh profile, or a new Browserbase session), its own redaction registry, and its own element uids. One session cannot see another session's pages, cookies, or snapshots.
-- A session belongs to the tenant, the token subject (`iss` and `sub`), and the OAuth client (`azp`, else `client_id`) that opened it. A request with that session id from another tenant's endpoint, another subject, or another client gets `404 Session not found`. A token that names no client can use only a session that a token without a client opened.
+- A session belongs to the tenant, subject (`iss` and `sub`), and OAuth client (`azp`, else `client_id`) that opened it. Anyone else gets `404 Session not found`.
 - Browserbase sessions start with recording and session logs off, and with `keepAlive: false`. The broker releases the Browserbase session when the MCP session closes.
-- The broker checks the token on every request. A `GET` stream (server-to-client events) stays open after the request, so the broker ends it when the token that opened it expires (`exp`). The client then opens a new stream with a fresh token. Responses to `POST` requests are not cut off this way: each one ends when its tool call ends.
-- Two requests in flight in one session cannot have the same JSON-RPC id. The transport sends each response to the request with the matching id, so a second request with that id would get the first one's response, even when its token lacks the first one's scope. The broker refuses such a request with `409`. An id is free again when the server has answered it and its HTTP response has ended. If the client disconnects before the answer, the id stays in use until the server answers.
+- A `GET` stream (server-to-client events) outlives its request, so the broker ends it when the token that opened it expires. The client reopens it with a fresh token.
+- Two requests in flight in one session cannot share a JSON-RPC id. The second would get the first one's response, even without the first one's scope. The broker answers `409`. An id is free again when the server has answered it and its HTTP response has ended.
 - A session sees only the pending fills it parked. `await_fill` with a fill id that belongs to another live session, another subject, or another tenant returns `Unknown fill_id`.
 - The broker closes a session's browser when the client sends `DELETE`, when the session is idle for `SBM_SESSION_IDLE_S`, and at shutdown.
 
 ## Restarts and pending fills
 
-A parked fill holds the export's decryption key. With `SBM_STATE_DIR` set, the broker writes each parked fill to one AES-256-GCM file under `SBM_STATE_DIR/tenants/<tenant>/`, and loads the files at startup. Each tenant's files are encrypted with a key derived from `SBM_STATE_KEY` and the tenant id (HKDF-SHA256), so one tenant's file does not decrypt as another's. Parked fills from a step-1 broker (files directly in `SBM_STATE_DIR`) are not loaded; see below.
+A parked fill holds the export's decryption key. With `SBM_STATE_DIR` set, the broker writes each parked fill to one AES-256-GCM file under `SBM_STATE_DIR/tenants/<tenant>/`, encrypted with a key derived from `SBM_STATE_KEY` and the tenant id (HKDF-SHA256), and loads the files at startup.
 
 After a restart, the old MCP session and its browser are gone. The client starts a new session (the broker answers the old session id with 404, as the MCP spec requires). A new session of the same tenant and subject can claim a parked fill by presenting its `fill_id`: the broker gave that random id only to the original session. The old element uids are gone too, so the agent navigates back to the page, takes a snapshot, and calls `await_fill` with the `fill_id` and the new `element_uid` or `fields`. The destination binding is checked again as for any fill.
 
@@ -251,9 +238,7 @@ Run one broker process per state directory. Two processes that share a directory
 
 ### Upgrading from the shared token
 
-A step-1 broker parked fills directly in `SBM_STATE_DIR`, exported with its one shared Turnkey key and owned by no tenant or subject. This broker does not load them: redeeming one through a tenant would use a key and organization that tenant may not own, and nothing records which tenant's caller parked it. At startup it logs how many it ignored.
-
-Before the upgrade, drain the pending fills: stop new traffic to the old broker, then wait until the agents have redeemed their parked fills or the 24-hour expiry passes. A fill still waiting for approval at the upgrade is lost, and its approval must be requested again. After the upgrade, delete the `*.fill` files left directly in `SBM_STATE_DIR`.
+A shared-token broker parked fills directly in `SBM_STATE_DIR`, owned by no tenant. This broker does not load them, and logs how many it skipped. Before the upgrade, let the agents redeem their parked fills, or wait for the 24-hour expiry. A fill still waiting at the upgrade is lost, and its approval must be requested again. Then delete the `*.fill` files left directly in `SBM_STATE_DIR`.
 
 ## Container
 

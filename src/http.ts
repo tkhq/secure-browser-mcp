@@ -6,54 +6,19 @@
  * and its browsers run here, so secret plaintext exists in this process
  * during a fill. See docs/THREAT-MODEL.md ("Hosted broker").
  *
- * Tenants. Each tenant in SBM_TENANTS has its own endpoint, /t/{id}/mcp,
- * and the broker is an OAuth 2.1 resource server for it (docs/HOSTED.md,
- * "Authorization"): requests carry a JWT access token from one of the
- * tenant's trusted issuers, for audience SBM_PUBLIC_URL + /t/{id}/mcp, with
- * the scope each called tool needs. A tenant's sessions use its own Turnkey
- * organization and API key and its own encrypted pending-fill store.
- *
- * Sessions. Each MCP session gets its own ToolContext (its own browser,
- * redaction registry, and view of the pending fills) and is bound to the
- * tenant, token subject, and OAuth client that opened it. Closing the session (DELETE,
- * idle timeout, or shutdown) closes its browser. Two requests in flight in
- * one session cannot share a JSON-RPC id (src/inflight.ts).
+ * Each tenant in SBM_TENANTS has its own endpoint, /t/{id}/mcp, with its
+ * own Turnkey key and pending-fill store, and the broker is an OAuth 2.1
+ * resource server for it. Each MCP session gets its own ToolContext (its
+ * own browser, redaction registry, and view of the pending fills) and is
+ * bound to the tenant, subject, and OAuth client that opened it. Closing
+ * the session (DELETE, idle timeout, or shutdown) closes its browser.
  *
  * Protocol: the 2025-era session protocol (initialize, Mcp-Session-Id),
  * through to 2025-11-25. A 2026-07-28 request (no session, per-request
  * `_meta` envelope) gets an UnsupportedProtocolVersion error; see
  * rejectModern below.
  *
- * Environment:
- *   SBM_TENANTS         path to the tenant config file (docs/HOSTED.md)
- *   SBM_PUBLIC_URL      origin clients use, e.g. https://sbm.example.com;
- *                       token audiences are built from it
- *   SBM_HTTP_HOST       listen address (default 127.0.0.1; 0.0.0.0 in the image)
- *   SBM_HTTP_PORT       listen port (default 8080)
- *   SBM_STATE_DIR       directory for encrypted pending fills. Without it,
- *                       pending fills are in memory and a restart strands them.
- *   SBM_STATE_KEY       32-byte key (hex or base64), required with
- *                       SBM_STATE_DIR. Each tenant's key is derived from it.
- *   SBM_MAX_SESSIONS    concurrent agent sessions (default 8)
- *   SBM_MAX_SESSIONS_PER_TENANT
- *                       concurrent sessions per tenant (default: an equal
- *                       share of SBM_MAX_SESSIONS)
- *   SBM_MAX_SESSIONS_PER_PRINCIPAL
- *                       concurrent sessions per principal (iss, sub) in a
- *                       tenant (default: 4, or the per-tenant cap if lower).
- *                       Not applied to the dev /mcp endpoint.
- *   SBM_SESSION_IDLE_S  close sessions idle this long (default 1800)
- *   SBM_ALLOWED_ORIGINS comma-separated origins (https://app.example.com)
- *                       that browser clients may call the MCP endpoints
- *                       from. Default empty: an MCP request with any Origin
- *                       header gets 403. Requests without Origin
- *                       (non-browser clients) are allowed. Protected
- *                       Resource Metadata is public and not checked.
- *   SBM_DEV_SHARED_TOKEN=1 with SBM_HTTP_TOKEN
- *                       development only: also serve /mcp behind one shared
- *                       bearer token, with the TURNKEY_* key (or the mock)
- * plus TURNKEY_API_BASE_URL and the SBM_* browser variables the stdio
- * broker reads.
+ * Configuration: docs/HOSTED.md.
  */
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import {
@@ -88,7 +53,6 @@ import {
   metadataUri,
   parsePublicUrl,
   tenantAudience,
-  tenantPath,
   type TenantConfig,
 } from "./auth/tenants.js";
 import { JwksCache, verifyAccessToken } from "./auth/tokens.js";
@@ -114,42 +78,33 @@ const MAX_BODY_BYTES = 1_000_000;
 /** JSON-RPC code for UnsupportedProtocolVersion (MCP 2026-07-28). */
 const UNSUPPORTED_PROTOCOL_VERSION = -32022;
 
-/** Where the shared-token dev endpoint keeps its fills. Not a valid tenant
- * id, so it cannot collide with one. */
+/** The dev endpoint's id. Not a valid tenant id, so it cannot collide. */
 const DEV_ENDPOINT_ID = "_shared-token";
 
 const SCOPE_BY_TOOL = new Map(TOOLS.map((t) => [t.name, t.scope]));
 
 /** The caller a request was authenticated as. */
 type Caller = {
-  /** Stable id for session and pending-fill binding. */
+  /** Binds sessions and parked fills. */
   principal: string;
-  /** The OAuth client the token was issued to, if it names one. */
-  client?: string;
+  client: string | undefined;
   scopes: ReadonlySet<string>;
-  /** When the token expires, in ms since the epoch. Absent for the dev
-   * shared token, which does not expire. */
+  /** Token expiry in ms since the epoch; absent for the dev token. */
   expiresAt?: number;
 };
-
-type AuthResult =
-  | { ok: true; caller: Caller }
-  | {
-      ok: false;
-      /** 400 for a malformed Authorization header, else 401. */
-      status: 400 | 401;
-      challenge: Omit<Challenge, "resourceMetadata" | "scopes">;
-    };
 
 /** One MCP endpoint: a tenant, or the dev shared-token endpoint. */
 type Endpoint = {
   id: string;
   broker: Broker;
   store: MemoryPendingFillStore;
-  authenticate: (req: IncomingMessage) => Promise<AuthResult>;
-  /** Absent for the dev endpoint, which has no OAuth metadata. */
-  resourceMetadata?: string;
+  /** The caller for a bearer token, or undefined if it is not valid. */
+  verify: (token: string) => Promise<Caller | undefined>;
+  /** Protected Resource Metadata; the dev endpoint has none. */
+  metadata?: { uri: string; doc: object };
 };
+
+type TenantEndpoint = Endpoint & { metadata: { uri: string; doc: object } };
 
 type Session = {
   transport: NodeStreamableHTTPServerTransport;
@@ -158,7 +113,6 @@ type Session = {
   endpoint: string;
   principal: string;
   client: string | undefined;
-  /** JSON-RPC request ids in flight; see src/inflight.ts. */
   inFlight: InFlightIds;
 };
 
@@ -170,10 +124,6 @@ function envInt(name: string, fallback: number): number {
     throw new Error(`${name} must be a positive integer`);
   }
   return n;
-}
-
-function envFlag(name: string): boolean {
-  return ["1", "true"].includes((process.env[name] ?? "").toLowerCase());
 }
 
 /** A store per endpoint: its own directory, under its own derived key. */
@@ -189,9 +139,8 @@ function storeFactory(): (endpointId: string) => MemoryPendingFillStore {
   const key = process.env["SBM_STATE_KEY"];
   if (!key) throw new Error("SBM_STATE_DIR requires SBM_STATE_KEY");
   const master = parseStateKey(key);
-  // Step-1 brokers parked fills directly in SBM_STATE_DIR, exported with the
-  // one shared Turnkey key. They belong to no tenant, so they are not loaded
-  // (docs/HOSTED.md, "Upgrading from the shared token").
+  // Fills a shared-token broker parked directly in SBM_STATE_DIR belong to
+  // no tenant, so they are not loaded (docs/HOSTED.md).
   const legacy = existsSync(dir)
     ? readdirSync(dir).filter((f) => f.endsWith(".fill")).length
     : 0;
@@ -211,35 +160,16 @@ function storeFactory(): (endpointId: string) => MemoryPendingFillStore {
 /** RFC 6750 §2.1 b64token: the only characters a bearer token may hold. */
 const B64TOKEN = /^[A-Za-z0-9._~+/-]+=*$/;
 
-/**
- * The bearer token in the Authorization header. "none" means the request
- * has no Bearer credentials at all (no header, or another scheme), which
- * RFC 6750 §3.1 answers without an error code. "malformed" means a Bearer
- * header that is not `Bearer <b64token>`, which is `invalid_request`.
- */
-type Bearer =
-  { kind: "token"; token: string } | { kind: "none" } | { kind: "malformed" };
-
-function bearerToken(req: IncomingMessage): Bearer {
+/** The Bearer token; "none" when the request has no Bearer credentials,
+ * which RFC 6750 §3.1 answers without an error code. */
+function bearerToken(
+  req: IncomingMessage,
+): { token: string } | "none" | "malformed" {
   const header = req.headers.authorization;
-  if (header === undefined || !/^Bearer(\s|$)/i.test(header)) {
-    return { kind: "none" };
-  }
-  const match = /^Bearer (\S+)$/i.exec(header);
-  return match && B64TOKEN.test(match[1]!)
-    ? { kind: "token", token: match[1]! }
-    : { kind: "malformed" };
+  if (header === undefined || !/^Bearer(\s|$)/i.test(header)) return "none";
+  const token = /^Bearer (\S+)$/i.exec(header)?.[1];
+  return token && B64TOKEN.test(token) ? { token } : "malformed";
 }
-
-const MALFORMED: AuthResult = {
-  ok: false,
-  status: 400,
-  challenge: {
-    error: "invalid_request",
-    description: "The Authorization header must be Bearer <token>",
-  },
-};
-const NO_TOKEN: AuthResult = { ok: false, status: 401, challenge: {} };
 
 /** Constant-time compare; compares digests so lengths do not leak. */
 function sameSecret(a: string, b: string): boolean {
@@ -252,51 +182,35 @@ function tenantEndpoint(
   tenant: TenantConfig,
   jwks: JwksCache,
   makeStore: (id: string) => MemoryPendingFillStore,
-): Endpoint {
-  const audience = tenantAudience(publicUrl, tenant);
+): TenantEndpoint {
+  const expect = {
+    audience: tenantAudience(publicUrl, tenant),
+    issuers: tenant.issuers,
+    allowedClients: tenant.allowedClients,
+  };
   return {
     id: tenant.id,
     broker: makeBroker(tenantSecretsClient(tenant)),
     store: makeStore(tenant.id),
-    resourceMetadata: metadataUri(publicUrl, tenant.id),
-    authenticate: async (req) => {
-      const bearer = bearerToken(req);
-      if (bearer.kind === "none") return NO_TOKEN;
-      if (bearer.kind === "malformed") return MALFORMED;
-      try {
-        const p = await verifyAccessToken(
-          bearer.token,
-          {
-            audience,
-            issuers: tenant.issuers,
-            ...(tenant.allowedClients
-              ? { allowedClients: tenant.allowedClients }
-              : {}),
-          },
-          jwks,
-        );
-        return {
-          ok: true,
-          caller: {
-            // The principal is (iss, sub) without the client, so a parked
-            // fill can be claimed by the same subject from another client.
-            principal: JSON.stringify([p.issuer, p.subject]),
-            ...(p.client !== undefined ? { client: p.client } : {}),
-            scopes: p.scopes,
-            expiresAt: p.expiresAt * 1_000,
-          },
-        };
-      } catch {
-        // Fail closed on every error, including an unreachable JWKS.
-        return {
-          ok: false,
-          status: 401,
-          challenge: {
-            error: "invalid_token",
-            description: "The access token is not valid for this resource",
-          },
-        };
-      }
+    metadata: {
+      uri: metadataUri(publicUrl, tenant.id),
+      doc: protectedResourceMetadata(publicUrl, tenant),
+    },
+    verify: async (token) => {
+      // Fail closed on every error, including an unreachable JWKS.
+      const p = await verifyAccessToken(token, expect, jwks).catch(
+        () => undefined,
+      );
+      return (
+        p && {
+          // (iss, sub) without the client, so the same subject can claim a
+          // parked fill from another client.
+          principal: JSON.stringify([p.issuer, p.subject]),
+          client: p.client,
+          scopes: p.scopes,
+          expiresAt: p.expiresAt * 1_000,
+        }
+      );
     },
   };
 }
@@ -305,35 +219,23 @@ function devEndpoint(
   token: string,
   makeStore: (id: string) => MemoryPendingFillStore,
 ): Endpoint {
+  const caller: Caller = {
+    principal: DEV_ENDPOINT_ID,
+    client: undefined,
+    scopes: new Set(SCOPES),
+  };
   return {
     id: DEV_ENDPOINT_ID,
     broker: makeBroker(),
     store: makeStore(DEV_ENDPOINT_ID),
-    authenticate: async (req) => {
-      const bearer = bearerToken(req);
-      if (bearer.kind === "none") return NO_TOKEN;
-      if (bearer.kind === "malformed") return MALFORMED;
-      if (sameSecret(bearer.token, token)) {
-        return {
-          ok: true,
-          caller: { principal: DEV_ENDPOINT_ID, scopes: new Set(SCOPES) },
-        };
-      }
-      return { ok: false, status: 401, challenge: { error: "invalid_token" } };
-    },
+    verify: async (t) => (sameSecret(t, token) ? caller : undefined),
   };
 }
 
 /**
- * Scopes the request's tools/call messages need and the caller lacks: the
- * union over a batch, so one 403 names every scope the client must add.
- *
- * This is not SDK v2's per-tool `scopeChallenge`. The SDK asks each request
- * in a batch in turn and answers with the first challenge, so a batch that
- * needs two scopes would take two step-ups. It also checks only after the
- * transport has the request, which needs the token in the SDK's AuthInfo,
- * and the broker keeps the token in the validator. Each tool still declares
- * its scope in its own definition (ToolDef.scope).
+ * Scopes the body's tools/call messages need and the caller lacks. This is
+ * the union over a batch, so one 403 names them all; SDK v2's per-tool
+ * scopeChallenge answers a batch with its first challenge only.
  */
 function missingScopes(body: unknown, caller: Caller): string[] {
   const messages = Array.isArray(body) ? body : [body];
@@ -374,7 +276,7 @@ function rpcError(
   res: ServerResponse,
   status: number,
   message: string,
-  { code = -32000 }: { code?: number } = {},
+  code = -32000,
 ) {
   send(res, status, { jsonrpc: "2.0", error: { code, message }, id: null });
 }
@@ -472,11 +374,8 @@ function refuse(
   endpoint: Endpoint,
   challenge: Omit<Challenge, "resourceMetadata">,
 ) {
-  const header = endpoint.resourceMetadata
-    ? wwwAuthenticate({
-        ...challenge,
-        resourceMetadata: endpoint.resourceMetadata,
-      })
+  const header = endpoint.metadata
+    ? wwwAuthenticate({ ...challenge, resourceMetadata: endpoint.metadata.uri })
     : challenge.error
       ? `Bearer error="${challenge.error}"`
       : "Bearer";
@@ -493,15 +392,37 @@ function refuse(
   );
 }
 
+/** The request's caller, or undefined after answering 400 or 401. */
+async function authenticate(
+  endpoint: Endpoint,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<Caller | undefined> {
+  const bearer = bearerToken(req);
+  if (bearer === "none") {
+    refuse(res, 401, endpoint, { scopes: SCOPES });
+  } else if (bearer === "malformed") {
+    refuse(res, 400, endpoint, {
+      error: "invalid_request",
+      description: "The Authorization header must be Bearer <token>",
+      scopes: SCOPES,
+    });
+  } else {
+    const caller = await endpoint.verify(bearer.token);
+    if (caller) return caller;
+    refuse(res, 401, endpoint, {
+      error: "invalid_token",
+      description: "The access token is not valid for this resource",
+      scopes: SCOPES,
+    });
+  }
+  return undefined;
+}
+
 /**
- * End a GET (server-to-client SSE) stream when the token that opened it
- * expires. Each POST is checked against its own token, but a GET stream
- * stays open for as long as the client keeps it, so it would outlive the
- * token. The client reconnects with a fresh token.
- *
- * The transport allows one GET stream per session and ends a second GET
- * at once, so a GET response still open at expiry is the session's GET
- * stream.
+ * End a GET (SSE) stream when the token that opened it expires. POSTs are
+ * checked one by one, but a GET stream would outlive its token. The
+ * transport allows one GET stream per session, so this is that stream.
  */
 function endStreamAtExpiry(
   s: Session,
@@ -511,8 +432,7 @@ function endStreamAtExpiry(
   const timer = setTimeout(
     () => {
       s.transport.closeStandaloneSSEStream();
-      // Closing the stream ends the response; if it does not, drop the
-      // connection.
+      // If closing the stream does not end the response, drop it.
       setTimeout(() => res.destroy(), 1_000).unref();
     },
     Math.max(0, expiresAt - Date.now()),
@@ -531,9 +451,7 @@ async function main(): Promise<void> {
   );
   const makeStore = storeFactory();
 
-  // Tenants: the production path.
-  const tenants = new Map<string, Endpoint>();
-  const metadata = new Map<string, object>();
+  const tenants = new Map<string, TenantEndpoint>();
   const tenantsPath = process.env["SBM_TENANTS"];
   if (tenantsPath) {
     const rawPublicUrl = process.env["SBM_PUBLIC_URL"];
@@ -547,7 +465,6 @@ async function main(): Promise<void> {
         tenant.id,
         tenantEndpoint(publicUrl, tenant, jwks, makeStore),
       );
-      metadata.set(tenant.id, protectedResourceMetadata(publicUrl, tenant));
       if (tenant.backend === "mock") {
         console.error(
           `secure-browser-mcp: WARNING: tenant ${tenant.id} uses the mock ` +
@@ -561,14 +478,14 @@ async function main(): Promise<void> {
   let dev: Endpoint | undefined;
   const sharedToken = process.env["SBM_HTTP_TOKEN"];
   if (sharedToken) {
-    if (!envFlag("SBM_DEV_SHARED_TOKEN")) {
+    const flag = (process.env["SBM_DEV_SHARED_TOKEN"] ?? "").toLowerCase();
+    if (flag !== "1" && flag !== "true") {
       throw new Error(
         "SBM_HTTP_TOKEN is for development only: set SBM_DEV_SHARED_TOKEN=1 " +
           "to serve /mcp with it, or unset it and configure SBM_TENANTS",
       );
     }
-    // A token the parser would never accept would 401 every request with
-    // nothing in the logs; refuse it up front instead.
+    // A token the header parser would never accept would 401 every request.
     if (!B64TOKEN.test(sharedToken)) {
       throw new Error(
         "SBM_HTTP_TOKEN may contain only letters, digits, and - . _ ~ + / " +
@@ -585,14 +502,13 @@ async function main(): Promise<void> {
   if (tenants.size === 0 && !dev) {
     throw new Error("Configure tenants with SBM_TENANTS and SBM_PUBLIC_URL");
   }
-  // By default each endpoint gets a fair share of the session slots, so one
-  // tenant cannot hold them all and lock the others out.
+  // By default each endpoint gets an equal share of the session slots, and
+  // one principal cannot take all of its tenant's.
   const endpoints = tenants.size + (dev ? 1 : 0);
   const maxPerTenant = envInt(
     "SBM_MAX_SESSIONS_PER_TENANT",
     Math.max(1, Math.floor(maxSessions / endpoints)),
   );
-  // And one principal cannot take all of its tenant's slots.
   const maxPerPrincipal = envInt(
     "SBM_MAX_SESSIONS_PER_PRINCIPAL",
     Math.min(4, maxPerTenant),
@@ -662,14 +578,8 @@ async function main(): Promise<void> {
     req: IncomingMessage,
     res: ServerResponse,
   ) => {
-    const auth = await endpoint.authenticate(req);
-    if (!auth.ok) {
-      return refuse(res, auth.status, endpoint, {
-        ...auth.challenge,
-        scopes: SCOPES,
-      });
-    }
-    const { caller } = auth;
+    const caller = await authenticate(endpoint, req, res);
+    if (!caller) return;
     const body = req.method === "POST" ? await readJson(req) : undefined;
 
     // Era routing (SDK v2 legacy-clients guide): 2025-era traffic goes to the
@@ -687,8 +597,8 @@ async function main(): Promise<void> {
       return rejectModern(res, req, body);
     }
 
-    // Scopes are checked per request against the token presented with it,
-    // so a session's rights follow its current token.
+    // Checked against the token sent with each request, so a session's
+    // rights follow its current token.
     const missing = missingScopes(body, caller);
     if (missing.length > 0) {
       return refuse(res, 403, endpoint, {
@@ -701,10 +611,8 @@ async function main(): Promise<void> {
     const sessionId = req.headers["mcp-session-id"];
     if (typeof sessionId === "string") {
       const s = sessions.get(sessionId);
-      // A session belongs to the endpoint, caller, and OAuth client that
-      // opened it; to anyone else it does not exist. 404 tells the client
-      // to start a new session (MCP spec), which is also what happens
-      // after a restart.
+      // To anyone but the endpoint, principal, and client that opened it,
+      // the session does not exist. 404 tells the client to start a new one.
       if (
         !s ||
         s.endpoint !== endpoint.id ||
@@ -714,9 +622,6 @@ async function main(): Promise<void> {
         return rpcError(res, 404, "Session not found");
       }
       s.lastSeen = Date.now();
-      // The transport maps responses by JSON-RPC id, so a request that
-      // reuses an id in flight would get the other request's response,
-      // which another token's scopes allowed (src/inflight.ts).
       const reserved = s.inFlight.reserve(body);
       if (!reserved.ok) {
         // id null: an answer with the reused id would look, to the client,
@@ -726,7 +631,7 @@ async function main(): Promise<void> {
           409,
           `Request id ${JSON.stringify(reserved.id)} is already in use ` +
             "in this session",
-          { code: -32600 },
+          -32600,
         );
       }
       res.once("finish", reserved.done);
@@ -740,11 +645,8 @@ async function main(): Promise<void> {
     if (req.method !== "POST" || !isInitializeRequest(body)) {
       return rpcError(res, 400, "Missing mcp-session-id");
     }
-    // A session holds a browser, so opening one needs a token that can use
-    // at least one tool: any sbm:* scope will do (the browser starts only
-    // when a tool needs it). The challenge names sbm:browse alone: every
-    // useful session drives the browser, and the client asks for fill and
-    // refs when a tool call needs them.
+    // A session holds a browser, so opening one needs some sbm:* scope. The
+    // challenge names sbm:browse, the scope every useful session needs.
     if (!SCOPES.some((s) => caller.scopes.has(s))) {
       return refuse(res, 403, endpoint, {
         error: "insufficient_scope",
@@ -758,11 +660,10 @@ async function main(): Promise<void> {
     const tenantSessions = [...sessions.values()].filter(
       (s) => s.endpoint === endpoint.id,
     );
-    // The dev endpoint has one principal, the shared token, so only the
-    // per-tenant cap applies to it.
     const callerSessions = tenantSessions.filter(
       (s) => s.principal === caller.principal,
     ).length;
+    // The dev endpoint has one principal, so only the tenant cap applies.
     if (endpoint !== dev && callerSessions >= maxPerPrincipal) {
       return rpcError(res, 503, "This caller is at its session limit");
     }
@@ -784,16 +685,11 @@ async function main(): Promise<void> {
       /^(\/\.well-known\/oauth-protected-resource)?\/t\/([^/]+)\/mcp$/.exec(
         path,
       );
-    if (!m) return undefined;
-    const id = m[2]!;
-    if (m[1]) {
-      const doc = metadata.get(id);
-      return doc ? { kind: "metadata", doc } : undefined;
-    }
-    const endpoint = tenants.get(id);
-    return endpoint && path === tenantPath(id)
-      ? { kind: "mcp", endpoint }
-      : undefined;
+    const endpoint = m && tenants.get(m[2]!);
+    if (!m || !endpoint) return undefined;
+    return m[1]
+      ? { kind: "metadata", doc: endpoint.metadata.doc }
+      : { kind: "mcp", endpoint };
   };
 
   const http = createHttpServer((req, res) => {
@@ -803,14 +699,6 @@ async function main(): Promise<void> {
     }
     const target = route(path);
     if (!target) return send(res, 404, { error: "not found" });
-    // Protected Resource Metadata is public and carries no credentials or
-    // tenant data beyond what the challenge already points at, so it skips
-    // the Origin check and allows any origin (browser-based clients fetch it
-    // cross-origin). Every MCP endpoint is checked, before auth and before
-    // any session work.
-    if (target.kind === "mcp" && !originAllowed(req, allowedOrigins)) {
-      return rpcError(res, 403, "Origin not allowed");
-    }
     if (target.kind === "metadata") {
       if (req.method !== "GET") {
         return send(
@@ -820,11 +708,16 @@ async function main(): Promise<void> {
           { allow: "GET" },
         );
       }
-      // Public metadata; browser-based clients fetch it cross-origin.
+      // Public, and holds nothing the 401 challenge does not point at, so
+      // it skips the Origin check; browser clients fetch it cross-origin.
       return send(res, 200, target.doc, {
         "access-control-allow-origin": "*",
         "cache-control": "max-age=300",
       });
+    }
+    // Before auth and before any session work.
+    if (!originAllowed(req, allowedOrigins)) {
+      return rpcError(res, 403, "Origin not allowed");
     }
     handleMcp(target.endpoint, req, res).catch((err) => {
       console.error("secure-browser-mcp: request failed:", err);
