@@ -1,9 +1,9 @@
+import type { RedactionRegistry } from "@turnkey/browser-secrets";
 import type { ZodObject, ZodRawShape, output } from "zod";
 
 import type { PendingFills } from "../broker/pending-store.js";
 import type { SecretsClient } from "../broker/secrets-client.js";
 import type { BrowserSession } from "../browser/session.js";
-import type { RedactionRegistry } from "../redaction/registry.js";
 
 export type { PendingFill } from "../broker/pending-store.js";
 
@@ -26,7 +26,7 @@ export type ToolContext = {
 
 /**
  * Tool results are plain JSON values. `server.ts` owns serialization: every
- * result passes through `scrub()` and is wrapped into MCP content there —
+ * result passes through `registry.scrub()` and is wrapped into MCP content there —
  * handlers cannot write to the transport directly.
  */
 export type ToolDef<Shape extends ZodRawShape = ZodRawShape> = {
