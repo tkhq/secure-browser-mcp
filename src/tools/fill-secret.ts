@@ -62,7 +62,7 @@ export const fillSecret = defineTool({
 
     // 3. Prompt-injection gate: the live page and every element must match
     //    the binding baked into the secret's static properties at import.
-    const resolved = await validateTargets(ctx, ref, specs);
+    const validated = await validateTargets(ctx, ref, specs);
 
     // 4. TODO: human confirmation (elicitation / MCP App) — later milestone.
 
@@ -90,7 +90,7 @@ export const fillSecret = defineTool({
           fillId: randomUUID(),
           pending: err.pending,
           targets: specs,
-          pageUrl: resolved[0]!.target.pageUrl,
+          pageUrl: validated.pageUrl,
           createdAt: Date.now(),
         };
         await ctx.pendingFills.put(fill);
@@ -99,9 +99,11 @@ export const fillSecret = defineTool({
       throw err;
     }
 
-    // 7. Inject via CDP; each part registers with the redaction registry
-    //    BEFORE the value touches the page, then the value is dropped.
-    await injectResolved(ctx, exported, resolved);
+    // 7. Inject via CDP. Each target is authorized again just before its
+    //    write and must still be the destination checked in step 3; each
+    //    part registers with the redaction registry BEFORE the value
+    //    touches the page, then the value is dropped.
+    await injectResolved(ctx, exported, validated);
 
     // Outcome only — never the value.
     return {

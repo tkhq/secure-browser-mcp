@@ -431,7 +431,7 @@ test("await_fill refuses to re-target a card fill at an unkeyed element", async 
     timeout_seconds: 5,
   });
   expect(unkeyed.isError).toBe(true);
-  expect(unkeyed.text).toContain("fill each part by key");
+  expect(unkeyed.text).toContain("unkeyed_target_for_field_binding");
 
   // A refused re-target leaves the parked targets in place.
   const done = await s.call("await_fill", {

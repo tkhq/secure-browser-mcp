@@ -1,5 +1,4 @@
-import type { ExportedSecret, FillTarget } from "../broker/types.js";
-import type { RedactionRegistry } from "../redaction/registry.js";
+import type { ExportedSecret } from "../broker/types.js";
 import type { BrowserSession } from "./session.js";
 
 /**
@@ -8,20 +7,18 @@ import type { BrowserSession } from "./session.js";
  * value must never transit `Runtime.evaluate`, whose expressions end up in
  * agent-visible tool code paths).
  *
- * Ordering contract: `registry.trackValue()` and `registry.trackField()` are
- * called BEFORE the value touches the page, so no snapshot/network read can
- * race ahead of redaction.
+ * Ordering contract: the caller registers the value and the target with
+ * the redaction registry BEFORE calling this, so no snapshot/network read
+ * can race ahead of redaction (see `injectResolved` in
+ * src/tools/fill-common.ts).
  */
 export async function injectSecret(
   session: BrowserSession,
-  target: FillTarget,
+  elementUid: string,
   secret: ExportedSecret,
-  registry: RedactionRegistry,
 ): Promise<void> {
-  registry.trackValue(secret.value, secret.ref.secretId);
-  registry.trackField(target.elementUid, secret.ref.secretId);
   try {
-    const element = session.resolveElement(target.elementUid);
+    const element = session.resolveElement(elementUid);
     const cdp = session.cdpSession();
 
     // Clear any stale content, then focus via CDP and insert the plaintext.

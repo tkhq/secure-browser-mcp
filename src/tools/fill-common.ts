@@ -1,15 +1,30 @@
 /**
- * Fill logic shared by fill_secret and await_fill: target validation against
- * the binding, and plaintext fan-out for JSON multi-field secrets. Both
- * callers run validation immediately before injection — for await_fill that
- * means re-validating after the approval wait, against the live page.
+ * Fill logic shared by fill_secret and await_fill: target authorization
+ * against the binding, and plaintext fan-out for JSON multi-field secrets.
+ *
+ * The decision is @turnkey/browser-secrets `authorize`, on an observation
+ * the browser layer reads from the live page (src/browser/observe.ts).
+ * Callers authorize before export, and `injectResolved` authorizes each
+ * target again immediately before its write and requires the same
+ * destination (`isSameDestination`): the same tab, frame, document and
+ * element that were checked.
  */
-import type { ElementHandle } from "puppeteer-core";
+import {
+  authorize,
+  DENY_REASON_MESSAGES,
+  isSameDestination,
+  redactionEntries,
+  validateRequest,
+  type AuthorizationAllowed,
+  type DenyReason,
+  type FillRequest,
+  type RedactionTarget,
+} from "@turnkey/browser-secrets";
 import { z } from "zod";
 
-import { BindingViolationError } from "../broker/binding.js";
-import type { ExportedSecret, FillTarget, SecretRef } from "../broker/types.js";
+import type { ExportedSecret, SecretRef } from "../broker/types.js";
 import { injectSecret } from "../browser/inject.js";
+import { observeTargets } from "../browser/observe.js";
 import type { ToolContext } from "./tool.js";
 
 /** One requested destination: an element, plus the payload key for JSON
@@ -51,104 +66,167 @@ export function specsFromArgs(args: {
     : [{ elementUid: args.element_uid! }];
 }
 
-type ResolvedTarget = {
-  spec: FillFieldSpec;
-  target: FillTarget;
-  handle: ElementHandle;
-};
+/** Why a fill was refused: a browser-secrets deny reason, or a page that
+ * changed between the check and the write. */
+export type FillDenyReason = DenyReason | "destination_changed";
+
+const DESTINATION_CHANGED =
+  "The page changed after the fill target was checked. Take a new " +
+  "snapshot and try again.";
 
 /**
- * Resolve every requested element on the live page and enforce the binding
- * per target. Plain fills check `binding.selector`; keyed fills check the
- * key's selector from `binding.fields` (and refuse keys the binding doesn't
- * declare — the agent cannot invent new destinations for payload parts).
+ * A refused fill. The message is a fixed text per reason, the reason code,
+ * and agent-supplied names only (the secret's name or ID, an element uid),
+ * so it holds no secret material and no page URL.
+ */
+export class FillDeniedError extends Error {
+  constructor(
+    readonly reason: FillDenyReason,
+    ref: Pick<SecretRef, "secretId" | "name">,
+    elementUid?: string,
+  ) {
+    const text =
+      reason === "destination_changed"
+        ? DESTINATION_CHANGED
+        : DENY_REASON_MESSAGES[reason];
+    super(
+      `Refusing to fill "${ref.name ?? ref.secretId}": ${text} ` +
+        `(${reason}${elementUid !== undefined ? `, element ${elementUid}` : ""})`,
+    );
+    this.name = "FillDeniedError";
+  }
+}
+
+/** A fill that passed `authorize` against the live page. */
+export type ValidatedFill = {
+  ref: SecretRef;
+  specs: FillFieldSpec[];
+  request: FillRequest;
+  decision: AuthorizationAllowed;
+  /** The live top-level URL the decision was made on. */
+  pageUrl: string;
+};
+
+function toRequest(specs: FillFieldSpec[]): FillRequest {
+  return {
+    targets: specs.map((s) =>
+      s.key === undefined
+        ? { elementId: s.elementUid }
+        : { elementId: s.elementUid, key: s.key },
+    ),
+  };
+}
+
+function deny(
+  ref: SecretRef,
+  specs: FillFieldSpec[],
+  reason: FillDenyReason,
+  targetIndex?: number,
+): FillDeniedError {
+  const uid = targetIndex === undefined ? undefined : specs[targetIndex];
+  return new FillDeniedError(reason, ref, uid?.elementUid);
+}
+
+/**
+ * Authorize every requested element on the live page. Request-shape and
+ * binding checks run first, before the browser is touched. Plain fills
+ * check `sbm:selector`; keyed fills check the key's selector from
+ * `sbm:fields` (and keys the binding doesn't declare are refused — the
+ * agent cannot invent new destinations for payload parts).
  */
 export async function validateTargets(
   ctx: ToolContext,
   ref: SecretRef,
   specs: FillFieldSpec[],
-): Promise<ResolvedTarget[]> {
-  if (specs.length === 0) throw new Error("No fill targets given");
-  const keyed = specs.filter((s) => s.key !== undefined);
-  if (keyed.length !== 0 && keyed.length !== specs.length) {
-    throw new Error("Mix of keyed and unkeyed fill targets");
-  }
-  const dupes = new Set<string>();
-  for (const s of specs) {
-    const tag = `${s.key ?? ""}\u0000${s.elementUid}`;
-    if (dupes.has(tag))
-      throw new Error(`Duplicate fill target: ${s.key ?? s.elementUid}`);
-    dupes.add(tag);
-  }
+): Promise<ValidatedFill> {
+  const request = toRequest(specs);
+  const early = validateRequest(ref, request);
+  if (!early.allowed) throw deny(ref, specs, early.reason, early.targetIndex);
+  // A uid this session never handed out (or one a navigation or restart
+  // invalidated) is refused before the page is looked at, so the agent is
+  // told to take a new snapshot rather than about the page it is on.
+  const unknown = specs.findIndex((s) => !ctx.session.hasElement(s.elementUid));
+  if (unknown !== -1) throw deny(ref, specs, "target_not_observed", unknown);
 
-  const page = await ctx.session.ensureStarted();
-  const resolved: ResolvedTarget[] = [];
-  for (const spec of specs) {
-    const element = ctx.session.resolveElement(spec.elementUid);
-    const selectorInfo = await element.handle.evaluate((el) => {
-      const input = el as HTMLInputElement;
-      return `${el.tagName.toLowerCase()}${input.type ? `[type=${input.type}]` : ""}`;
-    });
-    const target: FillTarget = {
-      pageUrl: page.url(),
-      elementUid: spec.elementUid,
-      selectorInfo,
-    };
-
-    if (spec.key === undefined) {
-      // A field-bound secret is a JSON payload with a selector per part.
-      // Without its own sbm:selector, an unkeyed fill would write the whole
-      // payload into any field on the page, so it is refused.
-      if (ref.binding?.fields && !ref.binding.selector) {
-        throw new BindingViolationError(
-          ref,
-          target,
-          "binding declares sbm:fields; fill each part by key with `fields`",
-        );
-      }
-      await ctx.binding.assertAllowed(ref, target, {
-        elementMatches: (selector) =>
-          element.handle.evaluate((el, sel) => el.matches(sel), selector),
-      });
-    } else {
-      // Keyed fill: origin/urlPattern checks as usual, then the key's own
-      // selector instead of the single-field one.
-      const fieldSelector = ref.binding?.fields?.[spec.key];
-      if (!fieldSelector) {
-        throw new BindingViolationError(
-          ref,
-          target,
-          `binding declares no field "${spec.key}" (sbm:fields)`,
-        );
-      }
-      const scoped: SecretRef = {
-        ...ref,
-        binding: { ...ref.binding!, selector: fieldSelector },
-      };
-      delete scoped.binding!.fields;
-      await ctx.binding.assertAllowed(scoped, target, {
-        elementMatches: (selector) =>
-          element.handle.evaluate((el, sel) => el.matches(sel), selector),
-      });
-    }
-    resolved.push({ spec, target, handle: element.handle });
+  const observation = await observeTargets(ctx.session, ref, request);
+  const decision = authorize(ref, request, observation);
+  if (!decision.allowed) {
+    throw deny(ref, specs, decision.reason, decision.targetIndex);
   }
-  return resolved;
+  return {
+    ref,
+    specs,
+    request,
+    decision,
+    pageUrl: observation.topLevelUrl,
+  };
+}
+
+/**
+ * Throws unless `later` was made on the same destination as `earlier`:
+ * the same browser, tab, documents and elements.
+ */
+export function assertSameDestination(
+  earlier: ValidatedFill,
+  later: ValidatedFill,
+): void {
+  if (!isSameDestination(earlier.decision, later.decision)) {
+    throw deny(later.ref, later.specs, "destination_changed");
+  }
+}
+
+/**
+ * Authorize target `index` again on a fresh observation, immediately before
+ * its write, and require the destination that was checked. Only that target
+ * is observed: an earlier write may have made the page replace an element
+ * it is done with. Returns the target's redaction identity.
+ */
+async function recheckTarget(
+  ctx: ToolContext,
+  fill: ValidatedFill,
+  index: number,
+): Promise<RedactionTarget> {
+  const request = { targets: [fill.request.targets[index]!] };
+  const observation = await observeTargets(ctx.session, fill.ref, request);
+  const current = authorize(fill.ref, request, observation);
+  if (!current.allowed) throw deny(fill.ref, fill.specs, current.reason, index);
+  const checked: AuthorizationAllowed = {
+    ...fill.decision,
+    targets: [fill.decision.targets[index]!],
+  };
+  if (!isSameDestination(checked, current)) {
+    throw deny(fill.ref, fill.specs, "destination_changed", index);
+  }
+  const target = current.targets[0]!;
+  return {
+    browserSessionId: current.browserSessionId,
+    tabId: current.tabId,
+    frameId: target.frameId,
+    documentId: target.documentId,
+    elementId: target.elementId,
+  };
 }
 
 /**
  * Route exported plaintext into the validated targets. For keyed fills the
- * value must be a JSON object holding every requested key; each part is
- * tracked by the redaction registry before it touches the page.
+ * value must be a JSON object holding every requested key. The value (and,
+ * for a secret bound with sbm:fields, each payload part) is registered with
+ * the redaction registry before anything touches the page. Each target is
+ * authorized again immediately before its write, and registered as a
+ * redaction target before the write.
+ *
+ * Parts shorter than the registry's minimum length (a 3-digit CVC) are not
+ * text-scanned; the registered target still redacts the field itself.
  */
 export async function injectResolved(
   ctx: ToolContext,
   exported: ExportedSecret,
-  resolved: ResolvedTarget[],
+  fill: ValidatedFill,
 ): Promise<void> {
   try {
+    ctx.registry.registerValues(redactionEntries(exported.ref, exported.value));
     let payload: Record<string, unknown> | undefined;
-    if (resolved.some((r) => r.spec.key !== undefined)) {
+    if (fill.specs.some((s) => s.key !== undefined)) {
       try {
         payload = JSON.parse(exported.value) as Record<string, unknown>;
       } catch {
@@ -157,7 +235,7 @@ export async function injectResolved(
         );
       }
     }
-    for (const { spec, target } of resolved) {
+    for (const [index, spec] of fill.specs.entries()) {
       let value = exported.value;
       if (spec.key !== undefined) {
         const part = payload?.[spec.key];
@@ -166,12 +244,13 @@ export async function injectResolved(
         }
         value = part;
       }
-      await injectSecret(
-        ctx.session,
-        target,
-        { ref: exported.ref, value, release: () => {} },
-        ctx.registry,
-      );
+      const target = await recheckTarget(ctx, fill, index);
+      ctx.registry.registerTarget(target, exported.ref.secretId);
+      await injectSecret(ctx.session, spec.elementUid, {
+        ref: exported.ref,
+        value,
+        release: () => {},
+      });
     }
   } finally {
     exported.release();

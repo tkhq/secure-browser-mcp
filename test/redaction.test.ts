@@ -1,18 +1,33 @@
 import { expect, test } from "bun:test";
 
-import { RedactionRegistry } from "../src/redaction/registry.js";
+import { RedactionRegistry } from "@turnkey/browser-secrets";
+
+/**
+ * The broker's redaction guarantees, run against the @turnkey/browser-secrets
+ * registry that now provides them. These cases came with the broker's own
+ * registry; keeping them here fails a package change that weakens them.
+ */
 
 const registry = () => {
   const r = new RedactionRegistry();
-  r.trackValue("4242424242424242", "card");
-  r.trackValue("123", "cvc");
+  r.registerValue("4242424242424242", "card");
+  r.registerValue("123", "cvc");
   return r;
 };
 
 test("scrubs exact matches", () => {
-  expect(registry().scrubText("n=4242424242424242&c=123")).toBe(
-    "n=[REDACTED:card]&c=[REDACTED:cvc]",
-  );
+  expect(registry().scrubText("n=4242424242424242")).toBe("n=[REDACTED:card]");
+});
+
+test("does not text-scan values shorter than four characters", () => {
+  // The broker's own registry scanned these exactly. browser-secrets skips
+  // them: they match unrelated text and are cheap to confirm by guessing.
+  // A filled CVC field is still redacted by its registered target.
+  const r = new RedactionRegistry();
+  expect(r.registerValues([{ value: "123", secretId: "cvc" }])).toEqual([
+    "cvc",
+  ]);
+  expect(r.scrubText("c=123")).toBe("c=123");
 });
 
 test("scrubs separator-formatted copies of long values", () => {
@@ -57,8 +72,8 @@ test("scrubs URL-encoded and other-script copies", () => {
 
 test("returns match spans for callers that map them back", () => {
   const text = "4242 4242 | 4242 4242";
-  expect(registry().matches(text)).toEqual([
-    { start: 0, end: text.length, secretId: "card" },
+  expect(registry().findMatches(text)).toEqual([
+    { start: 0, end: text.length, secretIds: ["card"] },
   ]);
 });
 
@@ -69,7 +84,7 @@ test("does not stitch digits across wide gaps", () => {
 
 test("strips punctuation from long non-digit values", () => {
   const r = new RedactionRegistry();
-  r.trackValue("sk_live_abc123def456", "key");
+  r.registerValue("sk_live_abc123def456", "key");
   expect(r.scrubText("key: SK-LIVE:ABC123,DEF456 ok")).toBe(
     "key: [REDACTED:key] ok",
   );
@@ -77,7 +92,7 @@ test("strips punctuation from long non-digit values", () => {
 
 test("folds case for long values", () => {
   const r = new RedactionRegistry();
-  r.trackValue("gb82west12345698765432", "iban");
+  r.registerValue("gb82west12345698765432", "iban");
   expect(r.scrubText("IBAN GB82 WEST 1234 5698 7654 32 ok")).toBe(
     "IBAN [REDACTED:iban] ok",
   );
@@ -91,8 +106,22 @@ test("leaves partial copies alone", () => {
   expect(registry().scrubText("card ending 4242")).toBe("card ending 4242");
 });
 
-test("findSecret reports formatted copies", () => {
+test("findSecretIds reports formatted copies", () => {
   const r = registry();
-  expect(r.findSecret("4242 4242 4242 4242")).toBe("card");
-  expect(r.findSecret("nothing here")).toBeUndefined();
+  expect(r.findSecretIds("4242 4242 4242 4242")).toEqual(["card"]);
+  expect(r.findSecretIds("nothing here")).toEqual([]);
+});
+
+test("target tags are document-scoped", () => {
+  const r = new RedactionRegistry();
+  const target = {
+    browserSessionId: "b",
+    tabId: "t",
+    frameId: "f",
+    documentId: "d1",
+    elementId: "e1",
+  };
+  r.registerTarget(target, "card");
+  expect(r.isRegisteredTarget(target)).toBe(true);
+  expect(r.isRegisteredTarget({ ...target, documentId: "d2" })).toBe(false);
 });

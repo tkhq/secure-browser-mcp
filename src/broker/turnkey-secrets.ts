@@ -1,3 +1,4 @@
+import { createSecretRef } from "@turnkey/browser-secrets";
 import { generateP256KeyPair } from "@turnkey/crypto";
 import type { TurnkeyApiClient } from "@turnkey/sdk-server";
 
@@ -8,7 +9,6 @@ import {
   type SecretsClient,
 } from "./secrets-client.js";
 import type { ExportedSecret, SecretRef } from "./types.js";
-import { parseBinding } from "./mock-secrets.js";
 import { signerOverrideFromEnv } from "./turnkey-env.js";
 
 /** Proposal shape returned by createExportSecretsProposal; the broker only
@@ -60,13 +60,13 @@ export class TurnkeySecretsClient implements SecretsClient {
         },
       });
       for (const s of secrets) {
-        const ref: SecretRef = {
-          secretId: s.secretId,
-          staticProperties: s.staticProperties,
-        };
-        if (s.name !== undefined) ref.name = s.name;
-        Object.assign(ref, parseBinding(s.staticProperties));
-        refs.push(ref);
+        refs.push(
+          createSecretRef({
+            secretId: s.secretId,
+            name: s.name,
+            staticProperties: s.staticProperties,
+          }),
+        );
       }
       if (secrets.length < PAGE_SIZE) break;
       after = secrets[secrets.length - 1]!.secretId;

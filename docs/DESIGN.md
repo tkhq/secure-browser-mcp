@@ -11,20 +11,23 @@ Turnkey's export flow fits this exactly. `exportSecret` re-encrypts the secret t
 `fill_secret(secret_id, element_uid)`:
 
 1. Resolve the ref and the target element.
-2. `BindingPolicy.assertAllowed(ref, target)` — see below.
+2. Observe the target on the live page (`src/browser/observe.ts`) and decide with `authorize(ref, request, observation)` from `@turnkey/browser-secrets` — see below.
 3. Optional human confirmation (see "MCP spec hooks").
 4. `SecretsClient.exportSecret(ref)` — plaintext lands in broker memory.
-5. Register the value and the field with the `RedactionRegistry` **before** injection.
-6. Inject over CDP `Input.insertText`. Never through `Runtime.evaluate`.
+5. Register the value with the `RedactionRegistry` **before** injection.
+6. For each target: observe and authorize again, require the same destination (`isSameDestination`), register the target, then inject over CDP `Input.insertText`. Never through `Runtime.evaluate`.
 7. Drop the value. Return outcome only: `{ filled: true }`.
 
 ## Destination binding
 
-Static properties are bound immutably to a secret at import and are policy-visible. We reserve three keys (`src/broker/types.ts`):
+Static properties are bound immutably to a secret at import and are policy-visible. `@turnkey/browser-secrets` parses them and makes the decision; its README lists every key. The main ones:
 
 - `sbm:origin` — exact origin, required for a secret to be fillable
 - `sbm:url-pattern` — optional URLPattern narrowing within the origin
 - `sbm:selector` — optional CSS selector the target field must match
+- `sbm:fields` — optional JSON map from payload key to selector, for a JSON secret with several parts
+
+`authorize` trusts the observation it is given. The broker reads every fact in it from the browser where page script cannot change it: frame, document, URL and origin from `Page.getFrameTree`, and selector matches and shadow-root mode in an isolated world.
 
 This is the prompt-injection defense. A malicious page can talk the agent into _requesting_ a fill. The fill still fails unless the live page matches the binding chosen by the human at import time.
 
@@ -32,12 +35,12 @@ Enforcement today is broker-side. The end state moves it into Turnkey's policy e
 
 ## Redaction
 
-One choke point: `server.ts` pipes every tool result and every error through `scrub()`. Handlers cannot write to the transport.
+One choke point: `server.ts` pipes every tool result and every error through the session's `RedactionRegistry` (`@turnkey/browser-secrets`). Handlers cannot write to the transport.
 
 Two mechanisms:
 
-- **Structural** (primary): fields that received a secret are tagged by element uid. Snapshot serializers elide their values. The network tool withholds request bodies for origins with live secrets. Screenshots mask tagged fields.
-- **Value-scan** (backstop): every exported plaintext goes into a scrub-set. Any string in any output that contains a live value is replaced with `[REDACTED:<secretId>]`.
+- **Structural** (primary): fields that received a secret are tagged by browser session, tab, frame, document and element uid. Snapshot serializers elide their values. The network tool withholds request bodies for origins with live secrets. Screenshots mask tagged fields.
+- **Value-scan** (backstop): every exported plaintext goes into a scrub-set. Any string in any output that contains a live value is replaced with `[REDACTED:<secretId>]`. Values shorter than four characters are not scanned; their fields stay redacted by the tag.
 
 Registration happens before the value touches the page, so no read can race ahead of redaction.
 
