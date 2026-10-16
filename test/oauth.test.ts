@@ -67,6 +67,8 @@ async function startBroker() {
       TURNKEY_API_PRIVATE_KEY: "",
       TURNKEY_ORGANIZATION_ID: "",
       SBM_HTTP_TOKEN: "",
+      // Every tenant here uses the mock backend, which needs the dev flag.
+      SBM_DEV_SHARED_TOKEN: "1",
       SBM_HEADLESS: "true",
       SBM_TENANTS: tenantsFile,
       SBM_PUBLIC_URL: base,
@@ -262,6 +264,28 @@ afterAll(async () => {
   asA.stop();
   asB.stop();
   rmSync(work, { recursive: true, force: true });
+});
+
+test("a mock tenant stops the broker at startup without the dev flag", async () => {
+  const proc = Bun.spawn(["bun", "src/http.ts"], {
+    cwd: new URL("..", import.meta.url).pathname,
+    stdout: "ignore",
+    stderr: "pipe",
+    env: {
+      ...process.env,
+      SBM_HTTP_TOKEN: "",
+      SBM_DEV_SHARED_TOKEN: "",
+      SBM_TENANTS: tenantsFile,
+      SBM_PUBLIC_URL: base,
+      SBM_HTTP_PORT: String(port + 1),
+    },
+  });
+  const guard = setTimeout(() => proc.kill(), 10_000);
+  expect(await proc.exited).not.toBe(0);
+  clearTimeout(guard);
+  expect(await new Response(proc.stderr).text()).toContain(
+    "Tenant alpha uses the mock secrets backend",
+  );
 });
 
 test("each tenant publishes its Protected Resource Metadata", async () => {

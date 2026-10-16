@@ -451,6 +451,10 @@ async function main(): Promise<void> {
     process.env["SBM_ALLOWED_ORIGINS"],
   );
   const makeStore = storeFactory();
+  // Development mode: the shared-token /mcp endpoint and mock tenants.
+  const devFlag = ["1", "true"].includes(
+    (process.env["SBM_DEV_SHARED_TOKEN"] ?? "").toLowerCase(),
+  );
 
   const tenants = new Map<string, TenantEndpoint>();
   const tenantsPath = process.env["SBM_TENANTS"];
@@ -462,16 +466,23 @@ async function main(): Promise<void> {
     const configs = loadTenants(tenantsPath);
     checkAudiences(publicUrl, configs);
     for (const tenant of configs) {
-      tenants.set(
-        tenant.id,
-        tenantEndpoint(publicUrl, tenant, jwks, makeStore),
-      );
       if (tenant.backend === "mock") {
+        if (!devFlag) {
+          throw new Error(
+            `Tenant ${tenant.id} uses the mock secrets backend, which is ` +
+              "for development only: set SBM_DEV_SHARED_TOKEN=1 to allow " +
+              'it, or use backend "turnkey"',
+          );
+        }
         console.error(
           `secure-browser-mcp: WARNING: tenant ${tenant.id} uses the mock ` +
             "secrets backend",
         );
       }
+      tenants.set(
+        tenant.id,
+        tenantEndpoint(publicUrl, tenant, jwks, makeStore),
+      );
     }
   }
 
@@ -479,8 +490,7 @@ async function main(): Promise<void> {
   let dev: Endpoint | undefined;
   const sharedToken = process.env["SBM_HTTP_TOKEN"];
   if (sharedToken) {
-    const flag = (process.env["SBM_DEV_SHARED_TOKEN"] ?? "").toLowerCase();
-    if (flag !== "1" && flag !== "true") {
+    if (!devFlag) {
       throw new Error(
         "SBM_HTTP_TOKEN is for development only: set SBM_DEV_SHARED_TOKEN=1 " +
           "to serve /mcp with it, or unset it and configure SBM_TENANTS",

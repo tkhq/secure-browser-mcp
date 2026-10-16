@@ -1,6 +1,9 @@
 /**
  * Tenant configuration for the hosted broker (docs/HOSTED.md, "Tenants").
- * The file holds references to keys, never keys.
+ * For a Turnkey tenant the file holds references to keys, never keys. A
+ * mock tenant (development and tests only, refused at startup without
+ * SBM_DEV_SHARED_TOKEN) may hold its fake secret values inline, in
+ * `mockSecrets`.
  */
 import { readFileSync } from "node:fs";
 
