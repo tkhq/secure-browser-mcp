@@ -80,16 +80,16 @@ SBM_DEV_SHARED_TOKEN=1 SBM_HTTP_TOKEN="$(openssl rand -hex 32)" bun run serve
 }
 ```
 
-| Field                  | Meaning                                                                                                                                                                                                          |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                   | Lowercase letters, digits, and dashes. Used in the endpoint URL and the state directory.                                                                                                                         |
-| `organizationId`       | The tenant's Turnkey organization. Every secret the tenant's sessions see comes from it.                                                                                                                         |
-| `apiKey`               | The tenant's Turnkey API key: `publicKeyEnv` and `privateKeyEnv` (environment variable names), or `path` to a JSON file `{"publicKey": "...", "privateKey": "..."}`.                                             |
-| `issuers`              | The authorization servers whose tokens the tenant accepts: the exact `issuer` and its `jwksUri`. HTTPS only (HTTP for `localhost`). `"requireTyp": true` also requires the `typ: at+jwt` header.                 |
-| `audience`             | Optional. The exact `aud` of the tenant's tokens, when the server cannot use the resource URI (Entra ID's `api://<app id>`). The default is the resource URI. Two tenants cannot share an audience.              |
-| `allowedClients`       | Optional. Client ids (`azp`, else `client_id`) whose tokens the tenant accepts. Without it, the tenant accepts every client its authorization servers issue tokens to, including dynamically registered clients. |
-| `authorizationServers` | Optional. What the Protected Resource Metadata advertises. The default is the `issuer` values.                                                                                                                   |
-| `backend`              | Optional. `"turnkey"` (default) or `"mock"`: in-memory `mockSecrets`, for development and tests only.                                                                                                            |
+| Field                  | Meaning                                                                                                                                                                                                                                                                                                            |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                   | Lowercase letters, digits, and dashes. Used in the endpoint URL and the state directory.                                                                                                                                                                                                                           |
+| `organizationId`       | The tenant's Turnkey organization. Every secret the tenant's sessions see comes from it.                                                                                                                                                                                                                           |
+| `apiKey`               | The tenant's Turnkey API key: `publicKeyEnv` and `privateKeyEnv` (environment variable names), or `path` to a JSON file `{"publicKey": "...", "privateKey": "..."}`.                                                                                                                                               |
+| `issuers`              | The authorization servers whose tokens the tenant accepts: the exact `issuer` and its `jwksUri`. HTTPS only (HTTP for `localhost`). `"requireTyp": true` also requires the `typ: at+jwt` header.                                                                                                                   |
+| `audience`             | Optional. The exact `aud` of the tenant's tokens, when the server cannot use the resource URI (Entra ID's `api://<app id>`). The default is the resource URI. Two tenants cannot share an audience.                                                                                                                |
+| `allowedClients`       | Optional. Client ids (`azp`, else `client_id`) whose tokens the tenant accepts. With it, a token must name its client. Without it, the tenant accepts every client its authorization servers issue tokens to, including dynamically registered clients and tokens that name no client (see [Sessions](#sessions)). |
+| `authorizationServers` | Optional. What the Protected Resource Metadata advertises. The default is the `issuer` values.                                                                                                                                                                                                                     |
+| `backend`              | Optional. `"turnkey"` (default) or `"mock"`: in-memory `mockSecrets`, for development and tests only.                                                                                                                                                                                                              |
 
 Give each tenant its own API key, scoped by Turnkey policy to its own organization. The broker never uses one tenant's key for another; Turnkey policy stops a key from reaching further. Approvals stay in Turnkey policy.
 
@@ -131,7 +131,7 @@ The metadata needs no authentication.
 - `exp` is at most 24 hours after now, and at most 24 hours after `iat` if present,
 - there is no `nonce` or `at_hash` claim (these mark an OpenID Connect ID token),
 - `sub` is present,
-- the client (`azp`, else `client_id`) is in `allowedClients`, if the tenant has that list.
+- the token names a client (`azp`, else `client_id`) that is in `allowedClients`, if the tenant has that list.
 
 Scopes come from `scope` (space-separated) and `scp` (a string or an array, as Okta issues), merged. A client-credentials token works if it meets the same rules; its `sub` is usually the client id. The broker does not accept opaque tokens or refresh tokens.
 
@@ -220,6 +220,7 @@ A client that negotiates the version (MCP TypeScript SDK v2 `versionNegotiation:
 
 - Each MCP session gets its own browser (a local Chrome process with a fresh profile, or a new Browserbase session), its own redaction registry, and its own element uids. One session cannot see another session's pages, cookies, or snapshots.
 - A session belongs to the tenant, subject (`iss` and `sub`), and OAuth client (`azp`, else `client_id`) that opened it. Anyone else gets `404 Session not found`.
+- If the token that opened a session has no `azp` or `client_id`, the broker cannot tell clients apart. The session then belongs to the tenant and subject only: any token of that subject without a client claim can use it, and a token with a client claim cannot. To bind every session to a client, set `allowedClients`. The broker then refuses tokens without a client claim.
 - Browserbase sessions start with recording and session logs off, and with `keepAlive: false`. The broker releases the Browserbase session when the MCP session closes.
 - A `GET` stream (server-to-client events) outlives its request, so the broker ends it when the token that opened it expires. The client reopens it with a fresh token.
 - Two requests in flight in one session cannot share a JSON-RPC id. The second would get the first one's response, even without the first one's scope. The broker answers `409`. An id is free again when the server has answered it and its HTTP response has ended.

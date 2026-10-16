@@ -613,6 +613,10 @@ async function main(): Promise<void> {
       const s = sessions.get(sessionId);
       // To anyone but the endpoint, principal, and client that opened it,
       // the session does not exist. 404 tells the client to start a new one.
+      // A session opened by a token without a client claim (client
+      // undefined) takes only tokens without one, and the reverse: it is
+      // bound to (tenant, iss, sub) alone. allowedClients makes the claim
+      // required.
       if (
         !s ||
         s.endpoint !== endpoint.id ||

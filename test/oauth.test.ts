@@ -423,6 +423,40 @@ test("a session answers only to the tenant, subject, and client that opened it",
   }
 });
 
+test("tokens of one subject with different clients cannot share a session", async () => {
+  const frank = (claims: Record<string, unknown>) =>
+    token(asA, "delta", { sub: "frank", claims });
+  const list = { method: "tools/list" };
+  const appA = await rawSession("delta", await frank({ azp: "app-a" }));
+  expect(
+    (await rpc("delta", await frank({ azp: "app-b" }), list, appA)).status,
+  ).toBe(404);
+  const appB = await rawSession("delta", await frank({ azp: "app-b" }));
+  expect(
+    (await rpc("delta", await frank({ azp: "app-a" }), list, appB)).status,
+  ).toBe(404);
+});
+
+test("a session opened without a client claim is bound to the tenant and subject only", async () => {
+  const gina = (claims: Record<string, unknown>, sub = "gina") =>
+    token(asA, "delta", { sub, claims });
+  const sessionId = await rawSession("delta", await gina({}));
+  const list = { method: "tools/list" };
+  const cases: [string, number][] = [
+    // Any token of the subject without a client claim: the broker cannot
+    // tell those clients apart (docs/HOSTED.md, "Sessions").
+    [await gina({}), 200],
+    [await gina({ azp: "" }), 200],
+    // A token that names a client, or another subject, cannot.
+    [await gina({ azp: "app-1" }), 404],
+    [await gina({ client_id: "app-1" }), 404],
+    [await gina({}, "hank"), 404],
+  ];
+  for (const [bearer, status] of cases) {
+    expect((await rpc("delta", bearer, list, sessionId)).status).toBe(status);
+  }
+});
+
 test("a tenant with allowedClients refuses tokens of other clients", async () => {
   const withClient = async (claims: Record<string, unknown>) =>
     (await rpc("epsilon", await token(asA, "epsilon", { claims }), initialize))

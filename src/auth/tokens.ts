@@ -31,7 +31,8 @@ const ALGORITHMS = ["RS256", "PS256", "ES256", "ES384", "EdDSA"];
 export type Principal = {
   issuer: string;
   subject: string;
-  /** `azp`, else `client_id`. */
+  /** `azp`, else `client_id`. Undefined when the token names no client:
+   * then nothing binds the caller to a client, only to (iss, sub). */
   client: string | undefined;
   scopes: Set<string>;
   /** `exp`, in seconds since the epoch. */
@@ -123,6 +124,8 @@ export async function verifyAccessToken(
   const client = [payload["azp"], payload["client_id"]].find(
     (c): c is string => typeof c === "string" && c !== "",
   );
+  // With allowedClients, a token must name its client. Without the list, a
+  // token without a client claim is bound to (iss, sub) only.
   if (
     expect.allowedClients &&
     (client === undefined || !expect.allowedClients.includes(client))
