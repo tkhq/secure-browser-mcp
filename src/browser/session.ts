@@ -80,6 +80,11 @@ export class BrowserSession {
     for (const e of elements) this.elements.set(e.uid, e);
   }
 
+  /** Whether a snapshot uid is known (it may still be detached). */
+  hasElement(uid: string): boolean {
+    return this.elements.has(uid);
+  }
+
   /**
    * Resolve a snapshot uid to a live element. Throws if the uid is unknown
    * or stale — callers surface "take a new snapshot" to the agent.

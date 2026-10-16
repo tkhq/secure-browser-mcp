@@ -99,7 +99,7 @@ test("refuses to fill into a non-matching destination", async () => {
     element_uid: password!.uid,
   });
   expect(fill.isError).toBe(true);
-  expect(fill.text).toContain("does not match bound origin");
+  expect(fill.text).toContain("top_level_origin_mismatch");
 });
 
 test("fills a JSON card secret into several fields with one call", async () => {
@@ -123,7 +123,7 @@ test("fills a JSON card secret into several fields with one call", async () => {
     element_uid: byName("cardName"),
   });
   expect(unkeyed.isError).toBe(true);
-  expect(unkeyed.text).toContain("fill each part by key");
+  expect(unkeyed.text).toContain("unkeyed_target_for_field_binding");
 
   // A payload key the binding doesn't declare is refused before any export,
   // and a declared key aimed at the wrong element fails its selector check.

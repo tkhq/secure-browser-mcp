@@ -1,30 +1,40 @@
 import { describe, expect, test } from "bun:test";
 
-import { BindingPolicy } from "../src/broker/binding.js";
-import { parseBinding } from "../src/broker/mock-secrets.js";
-import { BINDING_KEYS, type SecretRef } from "../src/broker/types.js";
+import { createSecretRef, DENY_REASONS } from "@turnkey/browser-secrets";
+
+import { MockSecretsClient } from "../src/broker/mock-secrets.js";
+import { BINDING_KEYS } from "../src/broker/types.js";
+import { FillDeniedError } from "../src/tools/fill-common.js";
 
 const origin = "https://shop.example";
 const fields = JSON.stringify({ number: "input[name=cardNumber]" });
 
-describe("parseBinding", () => {
+/**
+ * Bindings are parsed by @turnkey/browser-secrets. These cases pin the
+ * secrets the broker accepted and refused before the move, so a package
+ * change that loosens or breaks an existing secret fails here.
+ */
+describe("binding parsing", () => {
+  const ref = (staticProperties: Record<string, string>) =>
+    createSecretRef({ secretId: "s1", staticProperties });
+
   test("no sbm:origin means no binding", () => {
-    expect(parseBinding({})).toEqual({});
+    const parsed = ref({ [BINDING_KEYS.selector]: "input" });
+    expect(parsed.binding).toBeUndefined();
+    expect(parsed.bindingError).toBeUndefined();
   });
 
   test("parses a full binding", () => {
     expect(
-      parseBinding({
+      ref({
         [BINDING_KEYS.origin]: origin,
         [BINDING_KEYS.urlPattern]: "/checkout*",
         [BINDING_KEYS.fields]: fields,
-      }),
+      }).binding,
     ).toEqual({
-      binding: {
-        origin,
-        urlPattern: "/checkout*",
-        fields: { number: "input[name=cardNumber]" },
-      },
+      origin,
+      urlPattern: "/checkout*",
+      fields: { number: "input[name=cardNumber]" },
     });
   });
 
@@ -53,28 +63,35 @@ describe("parseBinding", () => {
       { [BINDING_KEYS.origin]: origin, [BINDING_KEYS.selector]: " " },
     ],
   ])("rejects a binding whose %s", (_, props) => {
-    const parsed = parseBinding(props);
+    const parsed = ref(props);
     expect(parsed.binding).toBeUndefined();
     expect(parsed.bindingError).toBeString();
   });
+
+  test("the mock seed secrets all bind", async () => {
+    for (const r of await new MockSecretsClient().listRefs()) {
+      expect(r.bindingError).toBeUndefined();
+      expect(r.binding?.origin).toBeString();
+    }
+  });
 });
 
-describe("BindingPolicy", () => {
-  test("refuses a secret with a malformed binding", async () => {
-    const ref: SecretRef = {
-      secretId: "s1",
-      staticProperties: {},
-      ...parseBinding({
-        [BINDING_KEYS.origin]: origin,
-        [BINDING_KEYS.fields]: "not json",
-      }),
-    };
-    await expect(
-      new BindingPolicy().assertAllowed(
-        ref,
-        { pageUrl: `${origin}/checkout`, elementUid: "e1" },
-        { elementMatches: async () => true },
-      ),
-    ).rejects.toThrow("destination binding is invalid");
+describe("FillDeniedError", () => {
+  const card = { secretId: "s1", name: "demo-card" };
+
+  test.each([...DENY_REASONS, "destination_changed" as const])(
+    "%s names the reason and holds no URL",
+    (reason) => {
+      const message = new FillDeniedError(reason, card, "e12").message;
+      expect(message).toStartWith('Refusing to fill "demo-card": ');
+      expect(message).toEndWith(`(${reason}, element e12)`);
+      expect(message).not.toMatch(/https?:/);
+    },
+  );
+
+  test("falls back to the secret ID without a name", () => {
+    expect(
+      new FillDeniedError("unbound_secret", { secretId: "s1" }).message,
+    ).toStartWith('Refusing to fill "s1": ');
   });
 });
