@@ -4,7 +4,8 @@
 # Chrome. Build with --build-arg LOCAL_CHROME=true to run Chrome in the
 # container instead; that needs a seccomp profile that allows user
 # namespaces (docs/HOSTED.md, "Local Chrome in a container").
-FROM oven/bun:1-debian
+# Pinned so a rebuild keeps a tested Bun. Bun 1.3.x fires no close on a client abort.
+FROM oven/bun:1.4.3-debian
 
 ARG LOCAL_CHROME=false
 RUN if [ "$LOCAL_CHROME" = "true" ]; then \
