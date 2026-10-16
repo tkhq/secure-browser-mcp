@@ -1,6 +1,9 @@
 /** Import a bound secret outside the agent session. Never accept plaintext in argv. */
 import { parseArgs } from "node:util";
 import { createInterface } from "node:readline/promises";
+
+import { parseBinding } from "@turnkey/browser-secrets";
+
 import { BINDING_KEYS } from "../src/broker/types.js";
 import {
   signerOverrideFromEnv,
@@ -58,11 +61,11 @@ export function parseImport(args: string[], env: NodeJS.ProcessEnv) {
   if (pattern !== undefined) {
     if (!pattern.startsWith("/"))
       return fail("--url-pattern must be a pathname pattern starting with /.");
-    try {
-      new URLPattern({ pathname: pattern, baseURL: origin });
-    } catch {
-      return fail("Invalid pathname pattern.");
-    }
+    const parsed = parseBinding({
+      [BINDING_KEYS.origin]: origin,
+      [BINDING_KEYS.urlPattern]: pattern,
+    });
+    if (parsed.status !== "bound") return fail("Invalid pathname pattern.");
     staticProperties[BINDING_KEYS.urlPattern] = pattern;
   }
   const variable = values["value-env"];
