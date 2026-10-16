@@ -76,7 +76,11 @@ test("rejects tokens that fail a claim check", async () => {
     ["lifetime > a day", { issuedAt: -2 * DAY, expiresIn: DAY - 60 }],
   ];
   // ID tokens, whatever their typ.
-  for (const claims of [{ nonce: "n-1" }, { at_hash: "abc" }]) {
+  for (const claims of [
+    { nonce: "n-1" },
+    { at_hash: "abc" },
+    { c_hash: "abc" },
+  ]) {
     for (const typ of ["JWT", "at+jwt", null]) {
       bad.push([`ID token ${typ}`, { claims, typ }]);
     }

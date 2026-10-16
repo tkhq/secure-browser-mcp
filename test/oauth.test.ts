@@ -339,6 +339,13 @@ test("a tenant's audience override replaces the resource URI", async () => {
     const bad = await asB.mint({ aud, scope: ALL });
     expect((await rpc("gamma", bad, initialize)).status).toBe(401);
   }
+  // With an override, typ: at+jwt is required by default: an ID token for
+  // a client whose id is the override, without nonce, at_hash, or c_hash,
+  // differs from an access token only by typ.
+  for (const typ of ["JWT", null]) {
+    const idShaped = await asB.mint({ aud: GAMMA_AUDIENCE, scope: ALL, typ });
+    expect((await rpc("gamma", idShaped, initialize)).status).toBe(401);
+  }
 });
 
 test("tenant endpoints refuse browser origins that are not allowed", async () => {

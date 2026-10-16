@@ -2,8 +2,9 @@
  * Access-token validation for the hosted broker, an OAuth 2.1 resource
  * server. The rules are in docs/HOSTED.md ("Authorization"). They follow
  * RFC 9068 with two differences: `typ: at+jwt` is checked only for an
- * issuer with `requireTyp`, because many servers do not send it; and `aud`
- * must be a single value.
+ * issuer with `requireTyp` (on by default when the tenant overrides its
+ * audience, see tenantIssuers), because many servers do not send it; and
+ * `aud` must be a single value.
  *
  * Every failure, including a JWKS that cannot be fetched, rejects the
  * token. The token itself goes nowhere: not to Turnkey, not to Browserbase,
@@ -107,9 +108,10 @@ export async function verifyAccessToken(
   if (typeof payload.sub !== "string" || payload.sub === "") {
     throw new InvalidTokenError("Token has no subject");
   }
-  // nonce and at_hash mark an OpenID Connect ID token. Not checked by typ,
-  // since Entra ID and others send `typ: JWT` on access tokens too.
-  if ("nonce" in payload || "at_hash" in payload) {
+  // nonce, at_hash, and c_hash mark an OpenID Connect ID token. Not
+  // checked by typ, since Entra ID and others send `typ: JWT` on access
+  // tokens too.
+  if ("nonce" in payload || "at_hash" in payload || "c_hash" in payload) {
     throw new InvalidTokenError("Token is an ID token");
   }
   // jose has checked that exp (required) and iat (if present) are numbers.

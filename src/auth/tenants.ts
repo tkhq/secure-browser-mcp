@@ -34,7 +34,8 @@ const issuerSchema = z
     /** Where that server publishes its signing keys. */
     jwksUri: url,
     /** Also require the `typ: at+jwt` header (RFC 9068 §2.1). Off by
-     * default, since many servers do not set it. */
+     * default, since many servers do not set it; on by default when the
+     * tenant's `audience` is not its resource URI (tenantIssuers). */
     requireTyp: z.boolean().optional(),
   })
   .strict();
@@ -196,6 +197,25 @@ export function tenantAudience(
   tenant: TenantConfig,
 ): string {
   return tenant.audience ?? resourceUri(publicUrl, tenant.id);
+}
+
+/**
+ * The tenant's issuers, with `requireTyp` on by default when `audience` is
+ * not the resource URI. An override can be a client id, which is also the
+ * `aud` of that client's ID tokens, and an ID token without `nonce`,
+ * `at_hash`, or `c_hash` differs from an access token only by `typ`. An
+ * explicit `requireTyp: false` (Entra ID, which sends `typ: JWT`) is kept.
+ */
+export function tenantIssuers(
+  publicUrl: string,
+  tenant: TenantConfig,
+): TrustedIssuer[] {
+  const overridden =
+    tenantAudience(publicUrl, tenant) !== resourceUri(publicUrl, tenant.id);
+  return tenant.issuers.map((i) => ({
+    ...i,
+    requireTyp: i.requireTyp ?? overridden,
+  }));
 }
 
 /** Refuse two tenants with one audience: the audience is what keeps one

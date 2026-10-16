@@ -53,6 +53,7 @@ import {
   metadataUri,
   parsePublicUrl,
   tenantAudience,
+  tenantIssuers,
   type TenantConfig,
 } from "./auth/tenants.js";
 import { JwksCache, verifyAccessToken } from "./auth/tokens.js";
@@ -185,7 +186,7 @@ function tenantEndpoint(
 ): TenantEndpoint {
   const expect = {
     audience: tenantAudience(publicUrl, tenant),
-    issuers: tenant.issuers,
+    issuers: tenantIssuers(publicUrl, tenant),
     allowedClients: tenant.allowedClients,
   };
   return {

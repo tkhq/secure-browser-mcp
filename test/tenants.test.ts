@@ -8,6 +8,7 @@ import {
   resolveApiKey,
   resourceUri,
   tenantAudience,
+  tenantIssuers,
 } from "../src/auth/tenants.js";
 
 const issuers = [
@@ -111,4 +112,26 @@ test("a tenant's audience defaults to its resource URI and must be unique", () =
     ],
   });
   expect(() => checkAudiences(base, clash)).toThrow(/same token audience/);
+});
+
+test("requires typ: at+jwt by default when the audience is overridden", () => {
+  const publicUrl = "https://sbm.example.com";
+  const requireTyp = (t: Record<string, unknown>) =>
+    tenantIssuers(
+      publicUrl,
+      parseTenants({ tenants: [{ id: "acme", backend: "mock", ...t }] })[0]!,
+    ).map((i) => i.requireTyp);
+  expect(requireTyp({ issuers })).toEqual([false]);
+  // An override equal to the resource URI is no override.
+  expect(
+    requireTyp({ issuers, audience: resourceUri(publicUrl, "acme") }),
+  ).toEqual([false]);
+  expect(requireTyp({ issuers, audience: "api://acme" })).toEqual([true]);
+  // An explicit setting wins, for servers such as Entra ID.
+  expect(
+    requireTyp({
+      issuers: [{ ...issuers[0], requireTyp: false }],
+      audience: "api://acme",
+    }),
+  ).toEqual([false]);
 });

@@ -85,7 +85,7 @@ SBM_DEV_SHARED_TOKEN=1 SBM_HTTP_TOKEN="$(openssl rand -hex 32)" bun run serve
 | `id`                   | Lowercase letters, digits, and dashes. Used in the endpoint URL and the state directory.                                                                                                                                                                                                                           |
 | `organizationId`       | The tenant's Turnkey organization. Every secret the tenant's sessions see comes from it.                                                                                                                                                                                                                           |
 | `apiKey`               | The tenant's Turnkey API key: `publicKeyEnv` and `privateKeyEnv` (environment variable names), or `path` to a JSON file `{"publicKey": "...", "privateKey": "..."}`.                                                                                                                                               |
-| `issuers`              | The authorization servers whose tokens the tenant accepts: the exact `issuer` and its `jwksUri`. HTTPS only (HTTP for `localhost`). `"requireTyp": true` also requires the `typ: at+jwt` header.                                                                                                                   |
+| `issuers`              | The authorization servers whose tokens the tenant accepts: the exact `issuer` and its `jwksUri`. HTTPS only (HTTP for `localhost`). `"requireTyp": true` also requires the `typ: at+jwt` header. It is on by default when the tenant sets `audience` to something other than the resource URI.                     |
 | `audience`             | Optional. The exact `aud` of the tenant's tokens, when the server cannot use the resource URI (Entra ID's `api://<app id>`). The default is the resource URI. Two tenants cannot share an audience.                                                                                                                |
 | `allowedClients`       | Optional. Client ids (`azp`, else `client_id`) whose tokens the tenant accepts. With it, a token must name its client. Without it, the tenant accepts every client its authorization servers issue tokens to, including dynamically registered clients and tokens that name no client (see [Sessions](#sessions)). |
 | `authorizationServers` | Optional. What the Protected Resource Metadata advertises. The default is the `issuer` values.                                                                                                                                                                                                                     |
@@ -108,7 +108,7 @@ The server must issue JWT access tokens whose `aud` is the tenant's resource URI
 
 The issuer is `https://<keycloak host>/realms/<realm>`. The JWKS URI is `https://<keycloak host>/realms/<realm>/protocol/openid-connect/certs`.
 
-**Entra ID.** Entra ID cannot put the resource URI in `aud`: set the tenant's `audience` to the app's `api://<app id>`. Its access tokens have `typ: JWT`, so leave `requireTyp` off. Expose the `sbm:*` scopes as delegated scopes; they arrive in `scp`. The broker does not read app roles (`roles`).
+**Entra ID.** Entra ID cannot put the resource URI in `aud`: set the tenant's `audience` to the app's `api://<app id>`. Its access tokens have `typ: JWT`, so set `"requireTyp": false` on the issuer. With an `audience` override, the broker otherwise requires `typ: at+jwt`, because an ID token whose `aud` is the override would pass every other check. Never set `audience` to a client id (the app id without `api://`): that is the `aud` of the app's ID tokens. Expose the `sbm:*` scopes as delegated scopes; they arrive in `scp`. The broker does not read app roles (`roles`).
 
 ## Authorization
 
@@ -126,10 +126,10 @@ The metadata needs no authentication.
 - `iss` is exactly one of the tenant's `issuers`,
 - the signature verifies against that issuer's JWKS with RS256, PS256, ES256, ES384, or EdDSA,
 - `aud` is exactly the tenant's resource URI (or `audience`), with no other audience,
-- the header has `typ: at+jwt`, if the issuer has `requireTyp`,
+- the header has `typ: at+jwt`, if the issuer has `requireTyp` (on by default when `audience` is not the resource URI),
 - `exp` is present and not past, and `nbf`, if present, is not in the future, with 30 seconds of clock skew,
 - `exp` is at most 24 hours after now, and at most 24 hours after `iat` if present,
-- there is no `nonce` or `at_hash` claim (these mark an OpenID Connect ID token),
+- there is no `nonce`, `at_hash`, or `c_hash` claim (these mark an OpenID Connect ID token),
 - `sub` is present,
 - the token names a client (`azp`, else `client_id`) that is in `allowedClients`, if the tenant has that list.
 
