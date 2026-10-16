@@ -66,6 +66,11 @@ export const fillSecret = defineTool({
     const resolved = await validateTargets(ctx, ref, specs);
 
     // 4. TODO: human confirmation (elicitation / MCP App) — later milestone.
+    //    A cancel frees this request's id while the handler still runs, so
+    //    check the request's `signal.aborted` (from the SDK's handler
+    //    context, which server.ts does not pass to tools yet) before each
+    //    elicitation or related notification. Otherwise it can reach a new
+    //    request that reuses the id (src/inflight.ts).
 
     // 5. Idempotency, BEFORE any export attempt: re-requesting a fill that
     //    is already parked on approval returns the same handle. Checking

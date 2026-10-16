@@ -16,6 +16,12 @@
  * An id the transport refused before the server saw it is reserved until
  * that HTTP response has ended. A cancel that arrives before its request does nothing
  * to the server, which still answers, so it does not settle the id either.
+ *
+ * A cancel frees the id at once, but the aborted handler keeps running. A
+ * notification or elicitation it then sends with `relatedRequestId` goes to
+ * the stream of a new request that reuses the id. No tool sends these
+ * today. A tool that does must check `signal.aborted` before each send, or
+ * the id must stay reserved until the handler returns.
  */
 import type { JSONRPCMessage, RequestId } from "@modelcontextprotocol/server";
 
