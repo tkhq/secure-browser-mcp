@@ -694,6 +694,47 @@ test("a request id is free again after its client disconnects, once the server h
   expect((await rpc("delta", bearer, listRefs, sessionId)).status).toBe(200);
 }, 15_000);
 
+test("a GET stream the client drops is released, and its expiry with it", async () => {
+  const long = await token(asA, "delta", { sub: "flaky" });
+  const sessionId = await rawSession("delta", long);
+  const get = (bearer: string, signal?: AbortSignal) =>
+    fetch(mcpUrl("delta"), {
+      ...(signal ? { signal } : {}),
+      headers: {
+        accept: "text/event-stream",
+        ...mcpHeaders(bearer, sessionId),
+      },
+    });
+  const short = await asA.mint({
+    aud: mcpUrl("delta"),
+    sub: "flaky",
+    scope: ALL,
+    expiresIn: 2,
+  });
+  const dropper = new AbortController();
+  const dropped = await get(short, dropper.signal);
+  expect(dropped.status).toBe(200);
+  dropper.abort();
+
+  // The session's one GET stream is free again, and the dropped stream's
+  // expiry does not end the new one.
+  const again = await get(long);
+  expect(again.status).toBe(200);
+  const reader = again.body!.getReader();
+  const deadline = Date.now() + 3_500;
+  let ended = false;
+  while (!ended && Date.now() < deadline) {
+    const next = await Promise.race([
+      reader.read(),
+      Bun.sleep(deadline - Date.now()).then(() => undefined),
+    ]);
+    if (next === undefined) break;
+    ended = next.done;
+  }
+  expect(ended).toBe(false);
+  await reader.cancel();
+}, 15_000);
+
 test("one principal or tenant cannot take every session slot", async () => {
   /** Open sessions until refused; returns how many opened, and the
    * refusal. */
