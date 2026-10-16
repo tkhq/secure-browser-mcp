@@ -669,6 +669,47 @@ test("a GET stream ends when its token expires", async () => {
   await again.body?.cancel();
 }, 15_000);
 
+test("a GET stream opened just after an expiry stays open", async () => {
+  const long = await token(asA, "delta", { sub: "erin2" });
+  const sessionId = await rawSession("delta", long);
+  const get = (bearer: string) =>
+    fetch(mcpUrl("delta"), {
+      headers: {
+        accept: "text/event-stream",
+        ...mcpHeaders(bearer, sessionId),
+      },
+    });
+  const short = await asA.mint({
+    aud: mcpUrl("delta"),
+    sub: "erin2",
+    scope: ALL,
+    expiresIn: 2,
+  });
+  const expiring = await get(short);
+  expect(expiring.status).toBe(200);
+  const old = expiring.body!.getReader();
+  while (!(await old.read()).done);
+
+  // Opened inside the expired stream's 1 s fallback, which must not end it.
+  const again = await get(long);
+  expect(again.status).toBe(200);
+  const reader = again.body!.getReader();
+  const deadline = Date.now() + 2_000;
+  let ended = false;
+  while (!ended && Date.now() < deadline) {
+    const next = await Promise.race([
+      reader.read(),
+      Bun.sleep(deadline - Date.now()).then(() => undefined),
+    ]);
+    if (next === undefined) break;
+    ended = next.done;
+  }
+  expect(ended).toBe(false);
+  // Still the session's one GET stream.
+  expect((await get(long)).status).toBe(409);
+  await reader.cancel();
+}, 15_000);
+
 test("a request id is free again after its client disconnects, once the server has answered", async () => {
   const bearer = await token(asA, "delta", { sub: "quitter" });
   const sessionId = await rawSession("delta", bearer);
