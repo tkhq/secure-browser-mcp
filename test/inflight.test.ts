@@ -15,6 +15,11 @@ const answer = (id: string | number) => ({
   id,
   result: {},
 });
+const cancel = (requestId: string | number) => ({
+  jsonrpc: "2.0" as const,
+  method: "notifications/cancelled",
+  params: { requestId },
+});
 const free = (ids: InFlightIds, id: string | number) => {
   const r = ids.reserve(call(id));
   if (r.ok) r.done();
@@ -41,37 +46,40 @@ test("refuses an id in flight, and one id twice in a batch", () => {
   expect(free(ids, "1")).toBe(true);
 });
 
-test("an id is free once its response ends and the server is done", () => {
-  const cases: [string, (ids: InFlightIds) => void][] = [
-    ["answered", (ids) => ids.outbound(answer(1))],
-    [
-      "cancelled",
-      (ids) =>
-        ids.inbound({
-          jsonrpc: "2.0",
-          method: "notifications/cancelled",
-          params: { requestId: 1 },
-        }),
-    ],
-  ];
-  for (const [, settle] of cases) {
+test("an id is free once the server has answered or cancelled it, or never saw it", () => {
+  // Answered or cancelled after dispatch: free at once, whether or not the
+  // HTTP response has ended.
+  for (const settle of [
+    (ids: InFlightIds) => ids.outbound(answer(1)),
+    (ids: InFlightIds) => ids.inbound(cancel(1)),
+  ]) {
     const ids = new InFlightIds();
     const r = ids.reserve(call(1));
     if (!r.ok) throw new Error("reserve failed");
     ids.inbound(call(1));
-    settle(ids);
     expect(free(ids, 1)).toBe(false);
-    r.done();
+    settle(ids);
     expect(free(ids, 1)).toBe(true);
   }
 
+  // A cancel that arrives before its request does nothing to the server,
+  // which still answers.
+  const early = new InFlightIds();
+  if (!early.reserve(call(1)).ok) throw new Error("reserve failed");
+  early.inbound(cancel(1));
+  early.inbound(call(1));
+  expect(free(early, 1)).toBe(false);
+  early.outbound(answer(1));
+  expect(free(early, 1)).toBe(true);
+
   // The transport refused the POST: the server never saw the id.
-  const ids = new InFlightIds();
-  const r = ids.reserve(call(1));
+  const refused = new InFlightIds();
+  const r = refused.reserve(call(1));
   if (!r.ok) throw new Error("reserve failed");
+  expect(free(refused, 1)).toBe(false);
   r.done();
   r.done();
-  expect(free(ids, 1)).toBe(true);
+  expect(free(refused, 1)).toBe(true);
 });
 
 test("after a disconnect, the id stays taken until the server answers", () => {

@@ -141,6 +141,17 @@ async function connect(tenant: string, bearer: string): Promise<Session> {
   return { client, call };
 }
 
+function mcpHeaders(
+  bearer: string | undefined,
+  sessionId: string | undefined,
+): Record<string, string> {
+  return {
+    "mcp-protocol-version": "2025-06-18",
+    ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+    ...(sessionId ? { "mcp-session-id": sessionId } : {}),
+  };
+}
+
 /** One raw JSON-RPC POST, for status codes and headers the SDK hides. A
  * message gets `jsonrpc` and `id: 1` unless it sets its own; an array is
  * sent as given, as a batch. */
@@ -156,9 +167,7 @@ async function rpc(
     headers: {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
-      "mcp-protocol-version": "2025-06-18",
-      ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
-      ...(sessionId ? { "mcp-session-id": sessionId } : {}),
+      ...mcpHeaders(bearer, sessionId),
       ...headers,
     },
     body: JSON.stringify(
@@ -633,9 +642,7 @@ test("a GET stream ends when its token expires", async () => {
     fetch(mcpUrl("delta"), {
       headers: {
         accept: "text/event-stream",
-        "mcp-protocol-version": "2025-06-18",
-        "mcp-session-id": sessionId,
-        authorization: `Bearer ${bearer}`,
+        ...mcpHeaders(bearer, sessionId),
       },
     });
 
@@ -660,6 +667,31 @@ test("a GET stream ends when its token expires", async () => {
   const again = await get(long);
   expect(again.status).toBe(200);
   await again.body?.cancel();
+}, 15_000);
+
+test("a request id is free again after its client disconnects, once the server has answered", async () => {
+  const bearer = await token(asA, "delta", { sub: "quitter" });
+  const sessionId = await rawSession("delta", bearer);
+  const listRefs = toolCall("list_secret_refs", {}, 11);
+  const dropper = new AbortController();
+  const dropped = await fetch(mcpUrl("delta"), {
+    method: "POST",
+    signal: dropper.signal,
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      ...mcpHeaders(bearer, sessionId),
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", ...listRefs }),
+  });
+  expect(dropped.status).toBe(200);
+  dropper.abort();
+
+  // Still in flight: its answer would go to a new request with this id.
+  expect((await rpc("delta", bearer, listRefs, sessionId)).status).toBe(409);
+  await Bun.sleep(LIST_DELAY_MS * 2);
+  // Answered, though nobody received it: the id is free.
+  expect((await rpc("delta", bearer, listRefs, sessionId)).status).toBe(200);
 }, 15_000);
 
 test("one principal or tenant cannot take every session slot", async () => {
