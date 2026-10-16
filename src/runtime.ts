@@ -4,7 +4,6 @@
  */
 import { existsSync } from "node:fs";
 
-import { BindingPolicy } from "./broker/binding.js";
 import { MockSecretsClient } from "./broker/mock-secrets.js";
 import type { PendingFills } from "./broker/pending-store.js";
 import type { SecretsClient } from "./broker/secrets-client.js";
@@ -70,7 +69,6 @@ export function findChrome(): string {
 export type Broker = {
   secrets: SecretsClient;
   backend: "mock" | "turnkey";
-  binding: BindingPolicy;
   /** Builds one browser host per agent session. */
   browserHost: () => BrowserHost;
   browser: "local" | "browserbase";
@@ -121,7 +119,6 @@ export function makeBroker(): Broker {
   return {
     secrets: client,
     backend,
-    binding: new BindingPolicy(),
     ...browserHostFromEnv(),
   };
 }
@@ -135,7 +132,6 @@ export function sessionContext(
   return {
     secrets: broker.secrets,
     backend: broker.backend,
-    binding: broker.binding,
     session: new BrowserSession(broker.browserHost()),
     registry: new RedactionRegistry(),
     pendingFills,

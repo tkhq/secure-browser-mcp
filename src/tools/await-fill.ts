@@ -2,10 +2,13 @@ import { z } from "zod";
 
 import { ConsensusPendingError } from "../broker/secrets-client.js";
 import {
+  assertSameDestination,
+  FillDeniedError,
   injectResolved,
   specsFromArgs,
   targetArgs,
   validateTargets,
+  type ValidatedFill,
 } from "./fill-common.js";
 import { pendingResult } from "./fill-secret.js";
 import { defineTool, type PendingFill, type ToolContext } from "./tool.js";
@@ -40,17 +43,18 @@ export const awaitFill = defineTool({
     // checks, so this lets the agent point at a fresh snapshot, not at a
     // destination fill_secret would refuse. They are checked before they
     // replace anything: a refused re-target leaves the parked targets as-is.
+    let checked: ValidatedFill;
     if (args.element_uid !== undefined || args.fields !== undefined) {
       const specs = specsFromArgs(args);
       if (!specs)
         throw new Error("Provide at most one of element_uid or fields");
-      await validateOrExplain(ctx, fill, specs);
+      checked = await validateOrExplain(ctx, fill, specs);
       fill.targets = specs;
       await ctx.pendingFills.put(fill);
     } else {
       // Check the destination before waiting, so a stale page is reported
       // now rather than after the approver acts. The fill stays parked.
-      await validateOrExplain(ctx, fill);
+      checked = await validateOrExplain(ctx, fill);
     }
 
     // Wait for quorum. Timeout is not failure: report pending and keep the
@@ -74,20 +78,26 @@ export const awaitFill = defineTool({
       throw err;
     }
 
-    // Approval took wall-clock time; the page may have moved. Re-resolve
-    // every element and re-check the binding against the live page before
-    // the plaintext goes anywhere. If a target is gone, the value is dropped
-    // (never redirected to a "close enough" field) and the fill stays
-    // parked: the approved export can be redeemed again into new targets.
-    let resolved;
+    // Approval took wall-clock time; the page may have moved. Re-check
+    // every element against the live page, and require the same tab,
+    // document and elements that were checked before the wait, before the
+    // plaintext goes anywhere. If a target is gone or the page changed, the
+    // value is dropped (never redirected to a "close enough" field) and the
+    // fill stays parked: the approved export can be redeemed again into
+    // new targets.
+    let validated;
     try {
-      resolved = await validateOrExplain(ctx, fill);
+      validated = await validateOrExplain(ctx, fill);
+      assertSameDestination(checked, validated);
     } catch (err) {
       exported.release();
+      if (err instanceof FillDeniedError) {
+        if (err.reason === "destination_changed") throw staleTargets(fill);
+      }
       throw err;
     }
 
-    await injectResolved(ctx, exported, resolved);
+    await injectResolved(ctx, exported, validated);
     await ctx.pendingFills.delete(fill.fillId);
     return {
       filled: true,
@@ -101,18 +111,25 @@ async function validateOrExplain(
   ctx: ToolContext,
   fill: PendingFill,
   targets = fill.targets,
-) {
+): Promise<ValidatedFill> {
   try {
     return await validateTargets(ctx, fill.pending.ref, targets);
   } catch (err) {
-    if (err instanceof Error && /Unknown element uid/i.test(err.message)) {
-      throw new Error(
-        "A target element is no longer available (the page changed or the " +
-          `broker restarted). Navigate to ${fill.pageUrl} if needed, take a ` +
-          "snapshot, and call await_fill again with this fill_id and the " +
-          "new element_uid or fields.",
-      );
+    if (
+      err instanceof FillDeniedError &&
+      err.reason === "target_not_observed"
+    ) {
+      throw staleTargets(fill);
     }
     throw err;
   }
+}
+
+function staleTargets(fill: PendingFill): Error {
+  return new Error(
+    "A target element is no longer available (the page changed or the " +
+      `broker restarted). Navigate to ${fill.pageUrl} if needed, take a ` +
+      "snapshot, and call await_fill again with this fill_id and the " +
+      "new element_uid or fields.",
+  );
 }

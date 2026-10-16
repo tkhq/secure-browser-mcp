@@ -1,6 +1,5 @@
 import type { ZodObject, ZodRawShape, output } from "zod";
 
-import type { BindingPolicy } from "../broker/binding.js";
 import type { PendingFills } from "../broker/pending-store.js";
 import type { SecretsClient } from "../broker/secrets-client.js";
 import type { BrowserSession } from "../browser/session.js";
@@ -11,14 +10,13 @@ export type { PendingFill } from "../broker/pending-store.js";
 /**
  * Shared wiring every tool handler receives. One context per agent session:
  * `session`, `registry`, and `pendingFills` belong to that session alone;
- * `secrets` and `binding` are shared by every session of the broker.
+ * `secrets` is shared by every session of the broker.
  */
 export type ToolContext = {
   secrets: SecretsClient;
   backend: "mock" | "turnkey";
   session: BrowserSession;
   registry: RedactionRegistry;
-  binding: BindingPolicy;
   /** This session's parked fills (see src/broker/pending-store.ts). */
   pendingFills: PendingFills;
   /** Dashboard link for an approval-gated activity; undefined when the

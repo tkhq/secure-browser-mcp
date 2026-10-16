@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { parseImport, runImport } from "../scripts/import-secret.js";
 import { listSecretRefs } from "../src/tools/list-secret-refs.js";
 import { MockSecretsClient } from "../src/broker/mock-secrets.js";
-import { BindingPolicy } from "../src/broker/binding.js";
 import {
   MemoryPendingFillStore,
   scopedFills,
@@ -144,7 +143,6 @@ for (const backend of ["mock", "turnkey"] as const) {
           new LocalChromeHost({ executablePath: "/unused" }),
         ),
         registry: new RedactionRegistry(),
-        binding: new BindingPolicy(),
         pendingFills: scopedFills(new MemoryPendingFillStore(), "test"),
       },
       {},

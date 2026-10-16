@@ -1,4 +1,4 @@
-import type { ExportedSecret, FillTarget } from "../broker/types.js";
+import type { ExportedSecret } from "../broker/types.js";
 import type { RedactionRegistry } from "../redaction/registry.js";
 import type { BrowserSession } from "./session.js";
 
@@ -14,14 +14,14 @@ import type { BrowserSession } from "./session.js";
  */
 export async function injectSecret(
   session: BrowserSession,
-  target: FillTarget,
+  elementUid: string,
   secret: ExportedSecret,
   registry: RedactionRegistry,
 ): Promise<void> {
   registry.trackValue(secret.value, secret.ref.secretId);
-  registry.trackField(target.elementUid, secret.ref.secretId);
+  registry.trackField(elementUid, secret.ref.secretId);
   try {
-    const element = session.resolveElement(target.elementUid);
+    const element = session.resolveElement(elementUid);
     const cdp = session.cdpSession();
 
     // Clear any stale content, then focus via CDP and insert the plaintext.
