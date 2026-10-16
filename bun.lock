@@ -7,6 +7,7 @@
       "dependencies": {
         "@modelcontextprotocol/node": "2.1.0",
         "@modelcontextprotocol/server": "2.2.0",
+        "@turnkey/browser-secrets": "0.0.1-alpha.0",
         "@turnkey/crypto": "^2.12.0",
         "@turnkey/sdk-server": "^8.3.0",
         "jose": "^6",
@@ -79,6 +80,8 @@
     "@tootallnate/quickjs-emscripten": ["@tootallnate/quickjs-emscripten@0.23.0", "", {}, "sha512-C5Mc6rdnsaJDjO3UpGW/CQTHtCKaYlScZTly4JIu97Jxo/odCiH0ITnDXSJPTOrEKk/ycSZ0AOgTmkDtkOsvIA=="],
 
     "@turnkey/api-key-stamper": ["@turnkey/api-key-stamper@0.6.13", "", { "dependencies": { "@noble/curves": "^1.3.0", "@turnkey/crypto": "2.12.0", "@turnkey/encoding": "0.6.0", "sha256-uint8array": "^0.10.7" } }, "sha512-0KHdrNwUYoMuYQKATQhefZeYoml9QdDqf2GvTLpy1wfjquegyn4LT2mKzshTDcDvHDeMlzxvaVg7oi2YA9WpIA=="],
+
+    "@turnkey/browser-secrets": ["@turnkey/browser-secrets@0.0.1-alpha.0", "", { "dependencies": { "urlpattern-polyfill": "10.1.0" } }, "sha512-vtktDG3fbj+9NTkXejRY/30Uxrvvicji0HPwZDkXjpQYJUCnC0vNbQCfQ6sTaXcY52WQVSeW5M2G8Fxwn4fMIQ=="],
 
     "@turnkey/crypto": ["@turnkey/crypto@2.12.0", "", { "dependencies": { "@noble/ciphers": "1.3.0", "@noble/curves": "1.9.0", "@noble/hashes": "1.8.0", "@peculiar/x509": "1.12.3", "@turnkey/encoding": "0.6.0", "@turnkey/sdk-types": "1.6.0", "borsh": "2.0.0", "cbor-js": "0.1.0" } }, "sha512-9myhmHnAgkuOLu2ClATMqwNow6a0GHIiKsKCjwO6/fpB0SiLsCtgm3FGwZpBDOlzuB+UmnaIQlfh4aPrHnS0HQ=="],
 
@@ -198,7 +201,6 @@
 
     "get-uri": ["get-uri@6.0.5", "", { "dependencies": { "basic-ftp": "^5.0.2", "data-uri-to-buffer": "^6.0.2", "debug": "^4.3.4" } }, "sha512-b1O07XYq8eRuVzBNgJLstU6FYc1tS6wnMtF1I1D9lE8LxZSOGZ7LhxN54yPP6mGw5f2CkXY2BQUL9Fx41qvcIg=="],
 
-
     "http-proxy-agent": ["http-proxy-agent@7.0.2", "", { "dependencies": { "agent-base": "^7.1.0", "debug": "^4.3.4" } }, "sha512-T1gkAiYYDWYx3V5Bmyu7HcfcvL7mUrTWiM6yOfa3PIphViJ/gFPbvidQ+veqSOHci/PxBcDabeUNCzpOODJZig=="],
 
     "https-proxy-agent": ["https-proxy-agent@7.0.6", "", { "dependencies": { "agent-base": "^7.1.2", "debug": "4" } }, "sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw=="],
@@ -300,6 +302,8 @@
     "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
+
+    "urlpattern-polyfill": ["urlpattern-polyfill@10.1.0", "", {}, "sha512-IGjKp/o0NL3Bso1PymYURCJxMPNAf/ILOpendP9f5B6e1rTJgdgiOvgfoT8VxCAdY+Wisb9uhGaJJf3yZ2V9nw=="],
 
     "viem": ["viem@2.56.0", "", { "dependencies": { "@noble/curves": "1.9.1", "@noble/hashes": "1.8.0", "@scure/bip32": "1.7.0", "@scure/bip39": "1.6.0", "abitype": "1.2.3", "isows": "1.0.7", "ox": "0.14.34", "ws": "8.21.0" }, "peerDependencies": { "typescript": ">=5.0.4" }, "optionalPeers": ["typescript"] }, "sha512-JmkgIk4jN+im4oguLxwPv19pwSaGH9kcGSq25Ilm55106ULBBMNR3eWKKA0wZoeyLPSHIiOwZ4sGceEYEIq7LA=="],
 
