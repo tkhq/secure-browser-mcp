@@ -90,6 +90,9 @@ export class MemoryPendingFillStore {
     if (fill.owner === owner) return fill;
     if (isLive(fill.owner)) return undefined;
     const claimed = { ...fill, owner };
+    // In memory before the write, so a claim that arrives while the file
+    // store writes sees the new owner.
+    this.fills.set(fillId, claimed);
     await this.put(claimed);
     return claimed;
   }

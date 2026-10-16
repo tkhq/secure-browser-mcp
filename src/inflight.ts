@@ -8,10 +8,14 @@
  * request could read a list_secret_refs result. src/http.ts refuses a
  * request whose id is in flight.
  *
- * An id stays reserved until its HTTP response has ended and the server
- * has answered it, the client cancelled it, or the transport never gave it
- * to the server. After a client disconnect the SDK still maps the id and
- * would send the late answer to the next request that uses it.
+ * An id the server received stays reserved until the server has answered
+ * it or aborted it on a cancel. After a client disconnect the SDK still maps
+ * the id and would send the late answer to the next request that uses it,
+ * and Bun's node:http emits no event on the server when a POST client
+ * disconnects, so the HTTP response is no signal for these. An id the
+ * transport refused before the server saw it is reserved until that HTTP
+ * response has ended. A cancel that arrives before its request does nothing
+ * to the server, which still answers, so it does not settle the id either.
  */
 import type { JSONRPCMessage, RequestId } from "@modelcontextprotocol/server";
 
@@ -19,7 +23,7 @@ type Entry = {
   httpDone: boolean;
   /** The transport gave the request to the server. */
   dispatched: boolean;
-  /** The server answered, or the client cancelled the request. */
+  /** The server answered, or the client cancelled a dispatched request. */
   settled: boolean;
 };
 
@@ -44,7 +48,8 @@ export class InFlightIds {
 
   /**
    * Reserve a POST body's request ids, or refuse the whole body when an id
-   * is in flight or appears twice. Call `done` when the HTTP response ends.
+   * is in flight or appears twice. Call `done` when the HTTP response ends;
+   * it frees the ids the transport never gave to the server.
    */
   reserve(
     body: unknown,
@@ -86,7 +91,7 @@ export class InFlightIds {
       const entry = this.entries.get(m.id);
       if (entry) entry.dispatched = true;
     } else if (m.method === "notifications/cancelled") {
-      // The server drops the answer to a cancelled request.
+      // The server drops the answer to a dispatched request it cancels.
       this.settle(m.params?.requestId);
     }
   }
@@ -100,18 +105,13 @@ export class InFlightIds {
   private settle(id: unknown): void {
     if (!isId(id)) return;
     const entry = this.entries.get(id);
-    if (!entry) return;
+    if (!entry || !entry.dispatched) return;
     entry.settled = true;
     this.releaseIfFree(id, entry);
   }
 
   private releaseIfFree(id: RequestId, entry: Entry): void {
-    if (
-      entry.httpDone &&
-      (entry.settled || !entry.dispatched) &&
-      this.entries.get(id) === entry
-    ) {
-      this.entries.delete(id);
-    }
+    const free = entry.dispatched ? entry.settled : entry.httpDone;
+    if (free && this.entries.get(id) === entry) this.entries.delete(id);
   }
 }

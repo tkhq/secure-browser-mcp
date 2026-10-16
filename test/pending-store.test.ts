@@ -59,6 +59,20 @@ test("an orphaned fill can be claimed only by the same principal", async () => {
   expect(alice1.list()).toEqual([]);
 });
 
+test("two sessions of one principal cannot both claim an orphan", async () => {
+  const store = new FilePendingFillStore(tempDir(), randomBytes(32));
+  await scopedFills(store, { owner: "gone", principal: "alice" }).put(
+    fill("f1"),
+  );
+  const isLive = (owner: string) => owner !== "gone";
+  const claims = await Promise.all(
+    ["s2", "s3"].map((owner) =>
+      scopedFills(store, { owner, principal: "alice", isLive }).get("f1"),
+    ),
+  );
+  expect(claims.filter((c) => c !== undefined).length).toBe(1);
+});
+
 test("tenant keys are independent, so one tenant's files do not load under another's key", async () => {
   const master = randomBytes(32);
   const keyA = tenantStateKey(master, "a");
