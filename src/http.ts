@@ -426,8 +426,9 @@ async function authenticate(
  * a GET stream would outlive its token. The transport allows one GET stream
  * per session, so this is that stream, and until a dropped one is released
  * the session cannot open another. The transport releases it on the
- * response's `close`, which Bun's node:http does not emit when the client
- * disconnects; the request's `close` fires on both runtimes.
+ * response's `close`, which node:http on Bun 1.3.x and earlier does not
+ * emit when the client disconnects; the request's `close` fires on every
+ * runtime.
  */
 function watchGetStream(
   s: Session,
