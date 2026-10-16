@@ -10,6 +10,7 @@ import {
   scopedFills,
   tenantStateKey,
   type PendingFill,
+  type StoredFill,
 } from "../src/broker/pending-store.js";
 
 const dirs: string[] = [];
@@ -71,6 +72,32 @@ test("two sessions of one principal cannot both claim an orphan", async () => {
     ),
   );
   expect(claims.filter((c) => c !== undefined).length).toBe(1);
+});
+
+test("a claim whose write fails leaves the orphan with its owner", async () => {
+  class FailingStore extends MemoryPendingFillStore {
+    failing = false;
+    override async put(f: StoredFill): Promise<void> {
+      if (this.failing) throw new Error("disk full");
+      await super.put(f);
+    }
+  }
+  const store = new FailingStore();
+  await scopedFills(store, { owner: "gone", principal: "alice" }).put(
+    fill("f1"),
+  );
+  const isLive = (owner: string) => owner !== "gone";
+  store.failing = true;
+  await expect(
+    scopedFills(store, { owner: "s2", principal: "alice", isLive }).get("f1"),
+  ).rejects.toThrow("disk full");
+  expect(store.list("gone").map((f) => f.fillId)).toEqual(["f1"]);
+  expect(store.list("s2")).toEqual([]);
+
+  // Still an orphan, so another session of the principal can claim it.
+  store.failing = false;
+  const s3 = scopedFills(store, { owner: "s3", principal: "alice", isLive });
+  expect((await s3.get("f1"))?.fillId).toBe("f1");
 });
 
 test("tenant keys are independent, so one tenant's files do not load under another's key", async () => {

@@ -93,7 +93,14 @@ export class MemoryPendingFillStore {
     // In memory before the write, so a claim that arrives while the file
     // store writes sees the new owner.
     this.fills.set(fillId, claimed);
-    await this.put(claimed);
+    try {
+      await this.put(claimed);
+    } catch (err) {
+      // The claim did not persist: give the fill back to its owner, unless
+      // something replaced it meanwhile.
+      if (this.fills.get(fillId) === claimed) this.fills.set(fillId, fill);
+      throw err;
+    }
     return claimed;
   }
 
