@@ -13,10 +13,12 @@ import {
   authorize,
   DENY_REASON_MESSAGES,
   isSameDestination,
+  redactionEntries,
   validateRequest,
   type AuthorizationAllowed,
   type DenyReason,
   type FillRequest,
+  type RedactionTarget,
 } from "@turnkey/browser-secrets";
 import { z } from "zod";
 
@@ -177,13 +179,13 @@ export function assertSameDestination(
  * Authorize target `index` again on a fresh observation, immediately before
  * its write, and require the destination that was checked. Only that target
  * is observed: an earlier write may have made the page replace an element
- * it is done with.
+ * it is done with. Returns the target's redaction identity.
  */
 async function recheckTarget(
   ctx: ToolContext,
   fill: ValidatedFill,
   index: number,
-): Promise<void> {
+): Promise<RedactionTarget> {
   const request = { targets: [fill.request.targets[index]!] };
   const observation = await observeTargets(ctx.session, fill.ref, request);
   const current = authorize(fill.ref, request, observation);
@@ -195,13 +197,26 @@ async function recheckTarget(
   if (!isSameDestination(checked, current)) {
     throw deny(fill.ref, fill.specs, "destination_changed", index);
   }
+  const target = current.targets[0]!;
+  return {
+    browserSessionId: current.browserSessionId,
+    tabId: current.tabId,
+    frameId: target.frameId,
+    documentId: target.documentId,
+    elementId: target.elementId,
+  };
 }
 
 /**
  * Route exported plaintext into the validated targets. For keyed fills the
- * value must be a JSON object holding every requested key; each part is
- * tracked by the redaction registry before it touches the page. Each
- * target is authorized again immediately before its write.
+ * value must be a JSON object holding every requested key. The value (and,
+ * for a secret bound with sbm:fields, each payload part) is registered with
+ * the redaction registry before anything touches the page. Each target is
+ * authorized again immediately before its write, and registered as a
+ * redaction target before the write.
+ *
+ * Parts shorter than the registry's minimum length (a 3-digit CVC) are not
+ * text-scanned; the registered target still redacts the field itself.
  */
 export async function injectResolved(
   ctx: ToolContext,
@@ -209,6 +224,7 @@ export async function injectResolved(
   fill: ValidatedFill,
 ): Promise<void> {
   try {
+    ctx.registry.registerValues(redactionEntries(exported.ref, exported.value));
     let payload: Record<string, unknown> | undefined;
     if (fill.specs.some((s) => s.key !== undefined)) {
       try {
@@ -228,13 +244,13 @@ export async function injectResolved(
         }
         value = part;
       }
-      await recheckTarget(ctx, fill, index);
-      await injectSecret(
-        ctx.session,
-        spec.elementUid,
-        { ref: exported.ref, value, release: () => {} },
-        ctx.registry,
-      );
+      const target = await recheckTarget(ctx, fill, index);
+      ctx.registry.registerTarget(target, exported.ref.secretId);
+      await injectSecret(ctx.session, spec.elementUid, {
+        ref: exported.ref,
+        value,
+        release: () => {},
+      });
     }
   } finally {
     exported.release();
