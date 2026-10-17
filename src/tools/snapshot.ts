@@ -3,6 +3,7 @@ import { defineTool } from "./tool.js";
 
 export const snapshot = defineTool({
   name: "snapshot",
+  scope: "sbm:browse",
   description:
     "Snapshot of the current page's interactive elements with stable " +
     "element uids for click/type/fill targeting. Values of fields that " +

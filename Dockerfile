@@ -4,7 +4,8 @@
 # Chrome. Build with --build-arg LOCAL_CHROME=true to run Chrome in the
 # container instead; that needs a seccomp profile that allows user
 # namespaces (docs/HOSTED.md, "Local Chrome in a container").
-FROM oven/bun:1-debian
+# Pinned so a rebuild keeps a tested Bun. Bun 1.3.x fires no close on a client abort.
+FROM oven/bun:1.4.3-debian
 
 ARG LOCAL_CHROME=false
 RUN if [ "$LOCAL_CHROME" = "true" ]; then \
@@ -19,7 +20,11 @@ RUN bun install --frozen-lockfile --production
 COPY src ./src
 COPY tsconfig.json ./
 
-ENV SBM_BROWSER=browserbase \
+# Tenants and their OAuth issuers come from a mounted file (docs/HOSTED.md,
+# "Tenants"); SBM_PUBLIC_URL must also be set at run time. The development
+# shared token (SBM_DEV_SHARED_TOKEN) is off in this image.
+ENV SBM_TENANTS=/etc/sbm/tenants.json \
+    SBM_BROWSER=browserbase \
     SBM_CHROME_PATH=/usr/bin/chromium \
     SBM_CHROME_ARGS=--disable-dev-shm-usage \
     SBM_HEADLESS=true \

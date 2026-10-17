@@ -12,6 +12,7 @@ import { defineTool, type PendingFill, type ToolContext } from "./tool.js";
 
 export const awaitFill = defineTool({
   name: "await_fill",
+  scope: "sbm:fill",
   description:
     "Complete a fill_secret that returned pending_approval. Waits for the " +
     "consensus export to be approved, re-validates the destination against " +

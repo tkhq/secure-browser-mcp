@@ -53,12 +53,30 @@ The hosted broker (`src/http.ts`, [HOSTED.md](HOSTED.md)) is a Turnkey-operated 
 | Browserbase (default browser host)       | Yes             | From the moment the value crosses the CDP WebSocket (TLS) until the session ends. The value is in their browser, and they operate the machine it runs on. Recording and session logs are off. |
 | The session's browser                    | Yes             | From injection until the session closes. The filled page holds the value as any form does.                                                                                                    |
 | Operators with access to the broker host | Yes             | Anyone who can read the broker's memory, attach a debugger, or change its image can read a value during a fill.                                                                               |
-| The state volume                         | No              | Parked fills hold the export decryption key, encrypted with `SBM_STATE_KEY`. The key is not on the volume.                                                                                    |
+| The state volume                         | No              | Parked fills hold the export decryption key, encrypted with a per-tenant key derived from `SBM_STATE_KEY`. The key is not on the volume.                                                      |
+| The tenant's authorization server        | No              | Never. It issues access tokens; the broker validates them and passes them nowhere.                                                                                                            |
 | The target site                          | Yes             | By design, as in v1.                                                                                                                                                                          |
 
-**Parked fills hold key material.** A parked fill contains the ephemeral private key for an export that approvers may still approve. Anyone with both the state volume and `SBM_STATE_KEY` can decrypt that export after approval. The broker encrypts each parked fill with AES-256-GCM and binds it to its file name, and drops parked fills after 24 hours.
+**Tenants and tokens.** Each tenant has its own endpoint, Turnkey organization and API key, and trusted authorization servers ([HOSTED.md](HOSTED.md#tenants)). The broker accepts only JWT access tokens whose audience is exactly the tenant's, and no two tenants share an audience, so a token for one tenant fails at another even when both trust the same issuer. Every validation failure, including an unreachable JWKS, refuses the request. Tokens are never forwarded or logged. Each tool needs a scope, checked on every call, so a token can be limited to driving the browser. The shared bearer token remains only as a development mode (`SBM_DEV_SHARED_TOKEN`), off by default.
 
-**Sessions.** Each MCP session gets its own browser. With local Chrome, the broker drives it over a pipe, so "nothing else attached" holds per session. With Browserbase, the broker cannot verify that nothing else is attached: Browserbase can attach, and anyone holding the session's connect URL can too. The broker never logs or returns that URL, and it never requests live-view or debug URLs. A session sees only its own pending fills. A fill whose session is gone (after a restart or reconnect) can be claimed by the session that presents its `fill_id`. The broker gave that random id only to the original session, but any holder of the bearer token and the id can claim the fill. Step 1 has one bearer token and one Turnkey key for all sessions, so every caller with the token can list and fill every secret the key can export. Per-tenant keys come in step 2.
+Tenant isolation covers:
+
+- A caller reaches only its tenant's secrets, through the tenant's API key. Turnkey policy on that key bounds what it can export. Without per-tenant keys scoped by policy, tenant separation rests on the broker's routing alone.
+- A session answers only to the tenant, subject (`iss`, `sub`), and OAuth client that opened it.
+- A parked fill belongs to one tenant and one subject, and is stored under the tenant's derived key. No other tenant can see or redeem it, and no other subject can claim it.
+- With `allowedClients`, tokens issued to other clients are refused.
+
+It does not cover:
+
+- The broker process holds plaintext during every fill, for every tenant. A compromise of the process exposes every tenant's fills in progress. Run separate deployments for tenants that must not share a process.
+- The authorization server is trusted for what it issues. If it is compromised, or issues tokens for the broker's audience to the wrong subjects, that tenant's secrets are exposed up to what its Turnkey policy and approvals allow.
+- Without `allowedClients`, every client the authorization server issues tokens to is trusted, including dynamically registered clients. A parked fill belongs to the subject, not the client, so another trusted client of the same subject can claim it.
+- `SBM_STATE_KEY` derives every tenant's key. The state volume and that key together decrypt every tenant's parked fills.
+- Tokens are bearer tokens. A stolen one works until it expires, for 24 hours at most. Sender-constrained tokens (DPoP) are not supported.
+
+**Parked fills hold key material.** A parked fill contains the ephemeral private key for an export that approvers may still approve. Anyone with both the state volume and `SBM_STATE_KEY` can decrypt that export after approval. The broker encrypts each parked fill with AES-256-GCM under its tenant's key and binds it to its file name, and drops parked fills after 24 hours.
+
+**Sessions.** Each MCP session gets its own browser. With local Chrome, the broker drives it over a pipe, so "nothing else attached" holds per session. With Browserbase, the broker cannot verify that nothing else is attached: Browserbase can attach, and anyone holding the session's connect URL can too. The broker never logs or returns that URL, and it never requests live-view or debug URLs. A session sees only its own pending fills. A fill whose session is gone (after a restart or reconnect) can be claimed by a session of the same tenant and subject that presents its `fill_id`. The broker gave that random id only to the original session.
 
 **Browser callers.** The broker refuses any request whose `Origin` header is not in `SBM_ALLOWED_ORIGINS` (empty by default), before it checks the bearer token. A web page that a user opens cannot use the user's browser to call a broker on a private network (DNS rebinding). Non-browser clients send no `Origin` and depend on the bearer token alone.
 
