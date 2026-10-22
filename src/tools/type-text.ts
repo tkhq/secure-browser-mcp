@@ -5,6 +5,7 @@ import { defineTool } from "./tool.js";
 export const typeText = defineTool({
   name: "type_text",
   scope: "sbm:browse",
+  browser: true,
   description:
     "Type non-secret text into an element. For secrets, use fill_secret — " +
     "passing a secret value here would expose it to the conversation.",

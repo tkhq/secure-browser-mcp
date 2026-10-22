@@ -16,7 +16,8 @@ import { McpStdioClient } from "./mcp-client.js";
  * The hosted broker (src/http.ts), black box, in its development
  * shared-token mode (SBM_DEV_SHARED_TOKEN): EMG-89 step 1 acceptance. Same
  * tools as stdio, sessions isolated from each other, and a pending fill
- * that survives a broker restart. Tenant OAuth is in oauth.test.ts.
+ * that survives a broker restart. Both protocol eras, with browser handles
+ * (EMG-288). Tenant OAuth is in oauth.test.ts.
  */
 
 const TOKEN = "test-token";
@@ -36,7 +37,9 @@ let broker: BrokerProcess;
 
 type BrokerProcess = { stop: () => Promise<void> };
 
-async function startBroker(): Promise<BrokerProcess> {
+async function startBroker(
+  env: Record<string, string> = {},
+): Promise<BrokerProcess> {
   const proc = Bun.spawn(["bun", "src/http.ts"], {
     cwd: new URL("..", import.meta.url).pathname,
     stdout: "ignore",
@@ -55,6 +58,7 @@ async function startBroker(): Promise<BrokerProcess> {
       SBM_MOCK_CONSENSUS: "demo-login-password,demo-card",
       SBM_MOCK_CONSENSUS_DELAY_MS: "2000",
       SBM_ALLOWED_ORIGINS: "https://allowed.example, http://localhost:3000",
+      ...env,
     },
   });
   let log = "";
@@ -79,10 +83,18 @@ type Session = {
   ) => Promise<{ isError: boolean; body: any; text: string }>;
 };
 
-async function connect(): Promise<Session> {
-  const client = new Client({ name: "http-test", version: "0" });
+/** A 2025-era session, or with `modern` a client pinned to 2026-07-28. */
+async function connect(
+  opts: { modern?: boolean; url?: string } = {},
+): Promise<Session> {
+  const client = new Client(
+    { name: "http-test", version: "0" },
+    opts.modern
+      ? { versionNegotiation: { mode: { pin: "2026-07-28" } } }
+      : undefined,
+  );
   await client.connect(
-    new StreamableHTTPClientTransport(new URL(url), {
+    new StreamableHTTPClientTransport(new URL(opts.url ?? url), {
       requestInit: { headers: { authorization: `Bearer ${TOKEN}` } },
       fetch: async (input, init) => {
         const res = await fetch(input, init);
@@ -110,9 +122,9 @@ async function connect(): Promise<Session> {
   return { client, call };
 }
 
-async function openLogin(s: Session) {
-  await s.call("navigate", { url: `${FIXTURE_ORIGIN}/login` });
-  const snap = (await s.call("snapshot")).body;
+async function openLogin(s: Session, browser: Record<string, string> = {}) {
+  await s.call("navigate", { url: `${FIXTURE_ORIGIN}/login`, ...browser });
+  const snap = (await s.call("snapshot", browser)).body;
   return snap.elements.find((e: { type?: string }) => e.type === "password")
     .uid as string;
 }
@@ -256,6 +268,7 @@ function modernDiscover(): RequestInit {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
       "mcp-protocol-version": "2026-07-28",
+      "mcp-method": "server/discover",
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
@@ -272,38 +285,152 @@ function modernDiscover(): RequestInit {
   };
 }
 
-test("a 2026-07-28 request gets UnsupportedProtocolVersion", async () => {
+test("a raw 2026-07-28 request is served without a session", async () => {
   const res = await fetch(url, modernDiscover());
-  expect(res.status).toBe(400);
+  expect(res.status).toBe(200);
   expect(res.headers.get("mcp-session-id")).toBeNull();
   const body = (await res.json()) as any;
   expect(body.id).toBe(7);
-  expect(body.error.code).toBe(-32022);
-  expect(body.error.data.requested).toBe("2026-07-28");
-  expect(body.error.data.supported).toContain("2025-11-25");
-  expect(body.error.data.supported).not.toContain("2026-07-28");
+  expect(body.result.supportedVersions).toContain("2026-07-28");
 });
 
-test("a client pinned to 2026-07-28 fails; auto mode falls back", async () => {
-  const transport = () =>
-    new StreamableHTTPClientTransport(new URL(url), {
-      requestInit: { headers: { authorization: `Bearer ${TOKEN}` } },
-    });
-  const pinned = new Client(
-    { name: "pinned", version: "0" },
-    { versionNegotiation: { mode: { pin: "2026-07-28" } } },
-  );
-  await expect(pinned.connect(transport())).rejects.toThrow();
-
+test("a client in auto mode now picks 2026-07-28", async () => {
   const auto = new Client(
     { name: "auto", version: "0" },
     { versionNegotiation: { mode: "auto" } },
   );
-  await auto.connect(transport());
-  expect(auto.getProtocolEra()).toBe("legacy");
-  expect((await auto.listTools()).tools.length).toBeGreaterThan(0);
+  await auto.connect(
+    new StreamableHTTPClientTransport(new URL(url), {
+      requestInit: { headers: { authorization: `Bearer ${TOKEN}` } },
+    }),
+  );
+  expect(auto.getProtocolEra()).toBe("modern");
   await auto.close();
 });
+
+test("a 2026-07-28 client lists refs, navigates, fills, and resumes a parked fill by browser_id", async () => {
+  const s = await connect({ modern: true });
+  expect(s.client.getProtocolEra()).toBe("modern");
+  const tools = (await s.client.listTools()).tools;
+  const navigateTool = tools.find((t) => t.name === "navigate")!;
+  expect(Object.keys(navigateTool.inputSchema.properties ?? {})).toContain(
+    "browser_id",
+  );
+
+  // There is no session, so a browser tool must name a browser.
+  const bare = await s.call("snapshot");
+  expect(bare.isError).toBe(true);
+  expect(bare.text).toContain("open_browser");
+
+  const secretId = await demoSecretId(s);
+  const { browser_id } = (await s.call("open_browser")).body;
+  expect(browser_id).toMatch(/^br_[A-Za-z0-9_-]{32}$/);
+  const uid = await openLogin(s, { browser_id });
+
+  const parked = (
+    await s.call("fill_secret", {
+      secret_id: secretId,
+      element_uid: uid,
+      browser_id,
+    })
+  ).body;
+  expect(parked.status).toBe("pending_approval");
+  // The fill is parked on the browser, not on the request: another
+  // browser of the same caller cannot take it while this one is open.
+  const other = (await s.call("open_browser")).body.browser_id;
+  const stolen = await s.call("await_fill", {
+    fill_id: parked.fill_id,
+    timeout_seconds: 1,
+    browser_id: other,
+  });
+  expect(stolen.text).toContain("Unknown fill_id");
+  await s.call("close_browser", { browser_id: other });
+
+  const done = await s.call("await_fill", {
+    fill_id: parked.fill_id,
+    timeout_seconds: 10,
+    browser_id,
+  });
+  expect(done.body).toMatchObject({ filled: true, secret_id: secretId });
+  const snap = (await s.call("snapshot", { browser_id })).body;
+  const filled = snap.elements.find((e: { uid: string }) => e.uid === uid);
+  expect(filled?.value).toBe("[REDACTED:secret-filled-field]");
+
+  expect((await s.call("close_browser", { browser_id })).body).toEqual({
+    closed: browser_id,
+  });
+  const gone = await s.call("snapshot", { browser_id });
+  expect(gone.isError).toBe(true);
+  expect(gone.text).toContain("Unknown browser_id");
+  await s.client.close();
+}, 60_000);
+
+test("a 2025 client with a new session per call keeps one browser_id (the Arcade pattern)", async () => {
+  // Every call opens a session and never closes it. More calls than the
+  // endpoint has session slots: idle, browserless sessions make room.
+  const call = async (name: string, args: Record<string, unknown> = {}) =>
+    (await connect()).call(name, args);
+
+  const { browser_id } = (await call("open_browser")).body;
+  const secretId = (await call("list_secret_refs")).body.refs.find(
+    (r: { name?: string }) => r.name === "demo-login-password",
+  ).secretId;
+  await call("navigate", { url: `${FIXTURE_ORIGIN}/login`, browser_id });
+  const snap = (await call("snapshot", { browser_id })).body;
+  expect(snap.url).toContain("/login");
+  const uid = snap.elements.find(
+    (e: { type?: string }) => e.type === "password",
+  ).uid;
+  // A session's own browser is still its own.
+  expect((await call("snapshot")).body.url).not.toContain("/login");
+
+  const parked = (
+    await call("fill_secret", {
+      secret_id: secretId,
+      element_uid: uid,
+      browser_id,
+    })
+  ).body;
+  expect(parked.status).toBe("pending_approval");
+  for (let i = 0; i < 6; i++) {
+    expect((await call("snapshot", { browser_id })).body.url).toContain(
+      "/login",
+    );
+  }
+  const done = await call("await_fill", {
+    fill_id: parked.fill_id,
+    timeout_seconds: 10,
+    browser_id,
+  });
+  expect(done.body).toMatchObject({ filled: true, secret_id: secretId });
+  const after = (await call("snapshot", { browser_id })).body;
+  const filled = after.elements.find((e: { uid: string }) => e.uid === uid);
+  expect(filled?.value).toBe("[REDACTED:secret-filled-field]");
+  expect((await call("close_browser", { browser_id })).isError).toBe(false);
+}, 90_000);
+
+test("an idle browser handle is closed after SBM_SESSION_IDLE_S", async () => {
+  const idlePort = port + 1;
+  const idleUrl = `http://127.0.0.1:${idlePort}/mcp`;
+  const idle = await startBroker({
+    SBM_HTTP_PORT: String(idlePort),
+    SBM_SESSION_IDLE_S: "1",
+    SBM_STATE_DIR: "",
+  });
+  try {
+    const s = await connect({ modern: true, url: idleUrl });
+    const { browser_id } = (await s.call("open_browser")).body;
+    expect((await s.call("open_browser")).body.idle_timeout_seconds).toBe(1);
+    await s.call("navigate", { url: `${FIXTURE_ORIGIN}/login`, browser_id });
+    await new Promise((r) => setTimeout(r, 3_000));
+    const gone = await s.call("snapshot", { browser_id });
+    expect(gone.isError).toBe(true);
+    expect(gone.text).toContain("Unknown browser_id");
+    await s.client.close();
+  } finally {
+    await idle.stop();
+  }
+}, 30_000);
 
 test("DELETE ends the session", async () => {
   const transport = new StreamableHTTPClientTransport(new URL(url), {

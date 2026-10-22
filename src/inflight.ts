@@ -85,6 +85,11 @@ export class InFlightIds {
     };
   }
 
+  /** Whether no request id of this session is in flight. */
+  get idle(): boolean {
+    return this.entries.size === 0;
+  }
+
   /** A message the transport gives to the server. */
   inbound(message: JSONRPCMessage): void {
     const m = message as {
