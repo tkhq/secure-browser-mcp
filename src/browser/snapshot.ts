@@ -6,6 +6,7 @@ import {
   topLevelDocument,
   type TopLevelDocument,
 } from "./observe.js";
+import { capturePageText, type PageText } from "./page-text.js";
 import type { BrowserSession, ResolvedElement } from "./session.js";
 
 /** Agent-visible description of one interactive element. */
@@ -24,6 +25,8 @@ export type SnapshotElement = {
 export type PageSnapshot = {
   url: string;
   title: string;
+  /** Headings and alert or status text (see src/browser/page-text.ts). */
+  text: PageText;
   elements: SnapshotElement[];
 };
 
@@ -124,7 +127,12 @@ export async function captureSnapshot(
 
   tagSplitCopies(registry, top, shown);
   session.setElements(resolved);
-  return { url: page.url(), title: await page.title(), elements };
+  return {
+    url: page.url(),
+    title: await page.title(),
+    text: await capturePageText(page, registry),
+    elements,
+  };
 }
 
 /**

@@ -8,7 +8,7 @@
     <!--
       Behaves like real payment forms: it groups the card number in fours,
       re-renders the input as a new node on change, and echoes the number
-      into a read-only summary field and the pay button.
+      into a read-only summary field, the pay button and a status line.
     -->
     <form id="checkout" action="/pay" method="post">
       <label for="cardNumber">Card number</label>
@@ -20,6 +20,7 @@
       <label for="summary">Paying with</label>
       <input type="text" id="summary" name="summary" readonly />
       <button type="submit" id="pay">Pay $9.99</button>
+      <p role="status" id="status"></p>
     </form>
     <script>
       const group = (v) =>
@@ -39,6 +40,8 @@
           document.getElementById("summary").value = fresh.value;
           document.getElementById("pay").textContent =
             "Pay $9.99 with " + fresh.value;
+          document.getElementById("status").textContent =
+            "Card " + fresh.value + " saved";
         });
       }
       wire(document.getElementById("cardNumber"));

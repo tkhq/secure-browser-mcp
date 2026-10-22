@@ -46,7 +46,7 @@ The script is a plain MCP client: it uses only the server's tools, exactly as an
 5. `type_text` the email, name, and ZIP. These are not secrets; they round-trip visibly.
 6. `fill_secret` three times: card number, expiry, CVC.
 7. `snapshot` — all three card fields show `[REDACTED:secret-filled-field]`.
-8. `click` Pay; `snapshot` until the receipt page replaces the form.
+8. `click` Pay; `snapshot` until the receipt page replaces the form. The snapshot `text` shows the confirmation message.
 
 The result: a completed purchase in the Stripe test dashboard, and a transcript in which the card number never appears.
 

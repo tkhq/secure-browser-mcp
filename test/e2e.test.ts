@@ -226,6 +226,33 @@ test("a new document does not inherit the old document's redaction tags", async 
   );
 });
 
+test("snapshot shows the receipt page's confirmation text", async () => {
+  // The previous test left a filled checkout form on the page.
+  const form = (await client.callTool("snapshot")).body as {
+    url: string;
+    text: { headings: string[] };
+    elements: { uid: string; text?: string }[];
+  };
+  expect(form.url).toBe(`${FIXTURE_ORIGIN}/checkout`);
+  expect(form.text.headings).toEqual(["Checkout"]);
+  const pay = form.elements.find((e) => e.text === "Pay $9.99")!;
+  expect(
+    (await client.callTool("click", { element_uid: pay.uid })).isError,
+  ).toBe(false);
+
+  type Snap = { url: string; text: { headings: string[]; alerts: string[] } };
+  let receipt: Snap | undefined;
+  for (let i = 0; i < 50 && !receipt?.url.endsWith("/pay"); i++) {
+    await Bun.sleep(100);
+    receipt = (await client.callTool("snapshot")).body as Snap;
+  }
+  expect(receipt?.url).toBe(`${FIXTURE_ORIGIN}/pay`);
+  expect(receipt?.text).toEqual({
+    headings: ["Payment complete"],
+    alerts: ["Your demo order is confirmed. Nothing was charged."],
+  });
+});
+
 test("redacts a card number the page reformats, re-renders and echoes", async () => {
   const refs = (await client.callTool("list_secret_refs")).body as {
     refs: { secretId: string; name?: string }[];
@@ -256,6 +283,7 @@ test("redacts a card number the page reformats, re-renders and echoes", async ()
   });
 
   const snap2 = (await client.callTool("snapshot")).body as {
+    text: { alerts: string[] };
     elements: { uid: string; name?: string; text?: string; value?: string }[];
   };
   // The page replaced the number input, so it has a fresh, untagged uid.
@@ -266,6 +294,10 @@ test("redacts a card number the page reformats, re-renders and echoes", async ()
   expect(summary.value).toBe("[REDACTED:secret-filled-field]");
   const pay = snap2.elements.find((e) => e.text?.startsWith("Pay"))!;
   expect(pay.text).toBe(`Pay $9.99 with [REDACTED:${card!.secretId}]`);
+  // The page also shows the number as status text.
+  expect(snap2.text.alerts).toEqual([
+    `Card [REDACTED:${card!.secretId}] saved`,
+  ]);
 
   expect(client.transcript).not.toContain("4242 4242 4242 4242");
   expect(client.transcript).not.toMatch(/4242\D?4242\D?4242\D?4242/);

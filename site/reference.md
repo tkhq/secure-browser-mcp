@@ -12,7 +12,7 @@ The tool surface is intentionally small. All results pass through the server's r
 | ----------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `list_secret_refs`      | None                                          | Opaque IDs, names, and destination bindings. Never returns secret values.                        |
 | `navigate`              | `url`                                         | Navigates the broker-owned browser and returns its final URL and title.                          |
-| `snapshot`              | None                                          | Returns interactive element IDs. Filled values are redacted.                                     |
+| `snapshot`              | None                                          | Returns interactive element IDs, headings, and alert text. Filled values are redacted.           |
 | `click`                 | `element_uid`                                 | Clicks an element from the most recent snapshot.                                                 |
 | `type_text`             | `element_uid`, `text`                         | Types visible, non-secret text. Never use it for a credential.                                   |
 | `fill_secret`           | `secret_id` plus `element_uid`, or `fields`   | Injects via CDP if the binding holds; says if each field kept it. May return `pending_approval`. |

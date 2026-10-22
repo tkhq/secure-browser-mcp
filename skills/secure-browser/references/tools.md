@@ -42,7 +42,11 @@ No tool ever returns a secret's value.
 
 ## snapshot
 
-No arguments. Returns `{ url, title, elements: [...] }` where each element has:
+No arguments. Returns `{ url, title, text: { headings, alerts }, elements: [...] }`.
+
+`text` is a short summary of what the page says, for reading results and errors: `headings` holds up to 20 visible headings, and `alerts` up to 10 visible alert, status, and live regions (`role=alert`, `role=status`, `aria-live`, `<output>`). Each entry is at most 200 characters. It is not the full page text. A secret the page shows as text is replaced with `[REDACTED:<secretId>]`.
+
+Each element has:
 
 - `uid` — targeting handle for click/type_text/fill_secret; valid until the next navigation
 - `tag`, `type`, `name`, `label`, `text`, `value` as available
