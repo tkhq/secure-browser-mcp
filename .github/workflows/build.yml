@@ -51,11 +51,15 @@ jobs:
             echo "image=secure-browser-mcp:pr-${SHA}" >> "$GITHUB_OUTPUT"
           fi
 
-      # Kargo's NewestBuild strategy orders images by their created time.
-      # Without this, every image built on the same base carries the base
-      # image's created time, so Kargo cannot see that a new build is newer.
+      # Kargo's NewestBuild strategy orders images by the
+      # org.opencontainers.image.created label when it is set. The base
+      # image sets it, so without our own value every image on the same
+      # base has the same time, and Kargo cannot see that a build is newer.
       - name: Use the commit time as the image created time
-        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+        id: created
+        run: echo "time=$(git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+        env:
+          TZ: UTC
 
       - name: Build and push
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
@@ -65,3 +69,4 @@ jobs:
           provenance: false
           push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.tag.outputs.image }}
+          labels: org.opencontainers.image.created=${{ steps.created.outputs.time }}
