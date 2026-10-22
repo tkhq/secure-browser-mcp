@@ -48,6 +48,8 @@ export type PendingFill = {
    * multi-field secrets. */
   targets: { key?: string; elementUid: string }[];
   pageUrl: string;
+  /** Agent-stated reason for the fill, shown to approvers. Unverified. */
+  intent?: string;
   createdAt: number;
 };
 
