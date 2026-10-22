@@ -1,10 +1,14 @@
-import type { RedactionRegistry } from "@turnkey/browser-secrets";
+import type {
+  RedactionRegistry,
+  RedactionTarget,
+} from "@turnkey/browser-secrets";
 import type { ElementHandle } from "puppeteer-core";
 
 import {
+  frameCache,
+  frameDocument,
   redactionTarget,
   topLevelDocument,
-  type TopLevelDocument,
 } from "./observe.js";
 import type { BrowserSession, ResolvedElement } from "./session.js";
 
@@ -19,6 +23,8 @@ export type SnapshotElement = {
   text?: string;
   value?: string;
   disabled?: boolean;
+  /** For an element inside an iframe: the origin of the frame's document. */
+  frame_origin?: string;
 };
 
 export type PageSnapshot = {
@@ -57,11 +63,13 @@ type RawInfo = {
 
 /**
  * Capture the interactive elements of the page and register them with the
- * session so uids resolve back to live nodes. Uids are derived from CDP
- * backendNodeIds, so a field keeps its uid across snapshots of the same
- * document — which is what lets `RedactionRegistry.registerTarget` tags
- * survive re-snapshotting. Tags are document-scoped: a new document in the
- * tab never matches an old tag.
+ * session so uids resolve back to live nodes. Every frame the broker can
+ * place is included, same-origin and cross-origin iframes alike, and so is
+ * every open shadow root in them. Closed shadow roots are not reachable.
+ * Uids are derived from CDP backendNodeIds, so a field keeps its uid across
+ * snapshots of the same document — which is what lets
+ * `RedactionRegistry.registerTarget` tags survive re-snapshotting. Tags are
+ * document-scoped: a new document in the frame never matches an old tag.
  *
  * Structural redaction happens HERE, not in scrub(): tagged fields, fields
  * that hold a live secret (a re-rendered or mirrored copy), and password
@@ -72,9 +80,9 @@ export async function captureSnapshot(
   registry: RedactionRegistry,
 ): Promise<PageSnapshot> {
   const page = await session.ensureStarted();
-  const top = await topLevelDocument(session);
+  const cache = frameCache();
+  const top = await topLevelDocument(session, cache);
 
-  const handles = await page.$$(INTERACTIVE_SELECTOR);
   const resolved: ResolvedElement[] = [];
   const elements: SnapshotElement[] = [];
 
@@ -82,47 +90,66 @@ export async function captureSnapshot(
   // page splits across several fields can be found in their concatenation.
   const shown: Shown[] = [];
 
-  for (const handle of handles) {
-    const info = await describeElement(handle);
-    if (!info.visible) {
-      void handle.dispose();
-      continue;
-    }
-    // backendNodeIds are stable per node for the life of the document, so a
-    // field keeps its uid across snapshots — and they are valid across CDP
-    // sessions, unlike objectIds.
-    const backendNodeId = await handle.backendNodeId();
-    const uid = `e${backendNodeId}`;
-    resolved.push({ uid, backendNodeId, handle });
+  for (const frame of page.frames()) {
+    const doc = await frameDocument(session, frame, cache);
+    if (!doc) continue;
+    const inFrame = frame !== page.mainFrame();
+    // `pierce/` matches through open shadow roots, not into iframes.
+    const handles = await frame
+      .$$(`pierce/${INTERACTIVE_SELECTOR}`)
+      .catch(() => []);
+    for (const handle of handles) {
+      const info = await describeElement(handle).catch(() => undefined);
+      if (!info?.visible) {
+        void handle.dispose();
+        continue;
+      }
+      // backendNodeIds are stable per node for the life of the document, so
+      // a field keeps its uid across snapshots — and they are valid across
+      // CDP sessions to the same target, unlike objectIds.
+      const backendNodeId = await handle.backendNodeId();
+      const uid = session.elementUid(doc.cdp, backendNodeId);
+      resolved.push({
+        uid,
+        backendNodeId,
+        handle,
+        cdp: doc.cdp,
+        frameId: doc.document.frameId,
+        documentId: doc.document.documentId,
+      });
 
-    const el: SnapshotElement = { uid, tag: info.tag };
-    if (info.role) el.role = info.role;
-    if (info.type) el.type = info.type;
-    if (info.name) el.name = info.name;
-    if (info.label) el.label = info.label;
-    if (info.text) el.text = info.text;
-    if (info.disabled) el.disabled = true;
-    if (info.value !== undefined) {
-      const target = redactionTarget(top, uid);
-      // A field the page re-rendered or mirrored the secret into: tag it
-      // so it stays redacted even after the page edits the copy.
-      for (const copied of registry.findSecretIds(info.value)) {
-        registry.registerTarget(target, copied);
+      const el: SnapshotElement = { uid, tag: info.tag };
+      if (info.role) el.role = info.role;
+      if (info.type) el.type = info.type;
+      if (info.name) el.name = info.name;
+      if (info.label) el.label = info.label;
+      if (info.text) el.text = info.text;
+      if (info.disabled) el.disabled = true;
+      if (inFrame) el.frame_origin = doc.document.origin;
+      if (info.value !== undefined) {
+        const target = redactionTarget(top, doc.document, uid);
+        // A field the page re-rendered or mirrored the secret into: tag it
+        // so it stays redacted even after the page edits the copy.
+        for (const copied of registry.findSecretIds(info.value)) {
+          registry.registerTarget(target, copied);
+        }
+        if (registry.isRegisteredTarget(target)) {
+          el.value = REDACTED_FIELD;
+        } else if (info.isPassword) {
+          // Password values are never echoed, filled or not.
+          el.value = info.value.length === 0 ? "" : "[MASKED:password-field]";
+        } else {
+          el.value = info.value;
+          if (info.value.length > 0) {
+            shown.push({ target, el, value: info.value });
+          }
+        }
       }
-      if (registry.isRegisteredTarget(target)) {
-        el.value = REDACTED_FIELD;
-      } else if (info.isPassword) {
-        // Password values are never echoed, filled or not.
-        el.value = info.value.length === 0 ? "" : "[MASKED:password-field]";
-      } else {
-        el.value = info.value;
-        if (info.value.length > 0) shown.push({ uid, el, value: info.value });
-      }
+      elements.push(el);
     }
-    elements.push(el);
   }
 
-  tagSplitCopies(registry, top, shown);
+  tagSplitCopies(registry, shown);
   session.setElements(resolved);
   return { url: page.url(), title: await page.title(), elements };
 }
@@ -133,13 +160,9 @@ export async function captureSnapshot(
  * part is too short to match alone, so match the values joined in document
  * order and redact every field a match touches.
  */
-type Shown = { uid: string; el: SnapshotElement; value: string };
+type Shown = { target: RedactionTarget; el: SnapshotElement; value: string };
 
-function tagSplitCopies(
-  registry: RedactionRegistry,
-  top: TopLevelDocument,
-  shown: Shown[],
-): void {
+function tagSplitCopies(registry: RedactionRegistry, shown: Shown[]): void {
   if (shown.length < 2) return;
   let joined = "";
   const ranges = shown.map(({ value }) => {
@@ -148,12 +171,10 @@ function tagSplitCopies(
     return { start, end: start + value.length };
   });
   for (const span of registry.findMatches(joined)) {
-    shown.forEach(({ uid, el }, k) => {
+    shown.forEach(({ target, el }, k) => {
       const range = ranges[k]!;
       if (range.start >= span.end || range.end <= span.start) return;
-      for (const id of span.secretIds) {
-        registry.registerTarget(redactionTarget(top, uid), id);
-      }
+      for (const id of span.secretIds) registry.registerTarget(target, id);
       el.value = REDACTED_FIELD;
     });
   }

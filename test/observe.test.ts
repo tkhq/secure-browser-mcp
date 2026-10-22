@@ -7,12 +7,17 @@ import {
   type SecretRef,
 } from "@turnkey/browser-secrets";
 import fixtureFile from "@turnkey/browser-secrets/fixtures/conformance.json" with { type: "json" };
-import type { ElementHandle, Page } from "puppeteer-core";
+import type { ElementHandle, Frame, Page } from "puppeteer-core";
 
 import { LocalChromeHost } from "../src/browser/hosts.js";
-import { observeTargets, topLevelDocument } from "../src/browser/observe.js";
+import {
+  frameDocument,
+  observeTargets,
+  topLevelDocument,
+} from "../src/browser/observe.js";
 import { BrowserSession } from "../src/browser/session.js";
 import { findChrome } from "../src/runtime.js";
+import { OTHER, PROVIDER, startFrameFixture } from "./fixtures/frames.js";
 import { FIXTURE_ORIGIN, startFixtureServer } from "./fixtures/serve.js";
 
 /**
@@ -22,11 +27,13 @@ import { FIXTURE_ORIGIN, startFixtureServer } from "./fixtures/serve.js";
  */
 
 let fixture: { stop: () => void };
+let frameFixture: { stop: () => void };
 let session: BrowserSession;
 let page: Page;
 
 beforeAll(async () => {
   fixture = startFixtureServer();
+  frameFixture = startFrameFixture();
   session = new BrowserSession(
     new LocalChromeHost({ executablePath: findChrome(), headless: true }),
   );
@@ -36,6 +43,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await session.close();
   fixture.stop();
+  frameFixture.stop();
 });
 
 /** Registers elements with the session the way a snapshot does. */
@@ -44,11 +52,18 @@ async function register(
 ): Promise<void> {
   session.setElements(
     await Promise.all(
-      Object.entries(handles).map(async ([uid, handle]) => ({
-        uid,
-        backendNodeId: await handle.backendNodeId(),
-        handle,
-      })),
+      Object.entries(handles).map(async ([uid, handle]) => {
+        const doc = await frameDocument(session, handle.frame);
+        if (!doc) throw new Error(`cannot place the frame of ${uid}`);
+        return {
+          uid,
+          backendNodeId: await handle.backendNodeId(),
+          handle,
+          cdp: doc.cdp,
+          frameId: doc.document.frameId,
+          documentId: doc.document.documentId,
+        };
+      }),
     ),
   );
 }
@@ -234,9 +249,11 @@ describe("observeTargets", () => {
  * expected decision come from the fixture. A fixture element ID names the
  * fixture field with that `name`.
  *
- * Cases on other origins (shop.example, the iframe pages on port 5001) need
- * pages this repo does not serve, or iframe support the snapshot does not
- * have yet (EMG-66). They are listed so a new case is not skipped silently.
+ * The iframe cases run against the frame fixture (test/fixtures/frames.ts),
+ * which serves the port 5001 and 5002 pages the fixture names. Cases on
+ * other origins (shop.example) need pages this repo does not serve, and the
+ * rest need observations a live page cannot produce. They are listed so a
+ * new case is not skipped silently.
  */
 describe("conformance fixture against live observations", () => {
   type Case = {
@@ -260,9 +277,15 @@ describe("conformance fixture against live observations", () => {
     "refuses a payload key the binding does not declare",
     "refuses a page outside the bound URL pattern",
     "refuses an element that does not match the bound selector",
+    "allows nested frames whose every ancestor is bound",
+    "refuses a srcdoc frame",
+    "refuses a sandboxed frame with an opaque origin",
+    "refuses a same-origin iframe without sbm:frame-origin",
+    "refuses a frame whose origin is not the bound frame origin",
+    "refuses nested frames with an unbound intermediate origin",
+    "refuses a frame-bound secret in the top-level document",
   ];
   const NOT_LIVE = [
-    "allows nested frames whose every ancestor is bound",
     "refuses a request with an empty element ID",
     "refuses the same key and element twice",
     "refuses a secret with a malformed binding",
@@ -270,12 +293,6 @@ describe("conformance fixture against live observations", () => {
     "refuses a look-alike host for an origin-only secret",
     "refuses a detached target",
     "refuses a frame ancestry that does not start at the top-level URL",
-    "refuses a srcdoc frame",
-    "refuses a sandboxed frame with an opaque origin",
-    "refuses a same-origin iframe without sbm:frame-origin",
-    "refuses a frame whose origin is not the bound frame origin",
-    "refuses nested frames with an unbound intermediate origin",
-    "refuses a frame-bound secret in the top-level document",
     "refuses an element in a closed shadow root",
     "refuses a target without selector evidence",
   ];
@@ -293,15 +310,36 @@ describe("conformance fixture against live observations", () => {
     password: "cardName",
   };
 
+  /** The frame fixture has two fields named "nested": pick the one whose
+   * frame sits inside this wrapper. */
+  const WRAPPERS: Record<string, string> = {
+    "allows nested frames whose every ancestor is bound": `${PROVIDER}/wrapper`,
+    "refuses nested frames with an unbound intermediate origin": `${OTHER}/wrapper`,
+  };
+
+  /** The field named `name` in any frame of the page. */
+  async function inFrames(
+    name: string,
+    wrapper: string | undefined,
+  ): Promise<ElementHandle<Element> | null> {
+    const within = (frame: Frame) =>
+      wrapper === undefined || frame.parentFrame()?.url() === wrapper;
+    for (const frame of page.frames().filter(within)) {
+      const handle = await frame.$(`pierce/[name=${name}]`);
+      if (handle) return handle;
+    }
+    return null;
+  }
+
   for (const c of cases.filter((c) => LIVE.includes(c.name))) {
     test(c.name, async () => {
       await page.goto(c.observation.topLevelUrl);
       const handles: Record<string, ElementHandle<Element>> = {};
       for (const { elementId } of c.request.targets) {
-        const name = (await page.$(`[name=${elementId}]`))
-          ? elementId
-          : ALIASES[elementId];
-        if (name) handles[elementId] = await byName(name);
+        const handle =
+          (await inFrames(elementId, WRAPPERS[c.name])) ??
+          (ALIASES[elementId] ? await byName(ALIASES[elementId]) : null);
+        if (handle) handles[elementId] = handle;
       }
       await register(handles);
       const ref: SecretRef = createSecretRef(c.secret);
