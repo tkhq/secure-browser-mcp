@@ -30,26 +30,26 @@ SBM_DEV_SHARED_TOKEN=1 SBM_HTTP_TOKEN="$(openssl rand -hex 32)" bun run serve
 
 ## Configuration
 
-| Variable                         | Default           | Purpose                                                                                                                                                                                      |
-| -------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SBM_TENANTS`                    | (none)            | Path to the tenant file. The image sets `/etc/sbm/tenants.json`; mount the file there.                                                                                                       |
-| `SBM_PUBLIC_URL`                 | (required)        | The origin clients reach the broker at, such as `https://sbm.example.com`. Token audiences are built from it.                                                                                |
-| `SBM_DEV_SHARED_TOKEN`           | (off)             | `1` serves `/mcp` with the shared token `SBM_HTTP_TOKEN`, and allows tenants with `backend: "mock"`. Development only.                                                                       |
-| `SBM_HTTP_HOST`                  | `127.0.0.1`       | Listen address. The container image sets `0.0.0.0`.                                                                                                                                          |
-| `SBM_HTTP_PORT`                  | `8080`            | Listen port.                                                                                                                                                                                 |
-| `SBM_STATE_DIR`                  | (none)            | Directory for parked fills. Without it, a restart strands every pending approval.                                                                                                            |
-| `SBM_STATE_KEY`                  | (none)            | 32-byte key, 64 hex characters or base64. Required with `SBM_STATE_DIR`. Each tenant's key is derived from it.                                                                               |
-| `TURNKEY_SIGNER_PUBLIC_KEY`      | (SDK default)     | Enclave quorum key that signs secret bundles. Required when `TURNKEY_API_BASE_URL` points at a Turnkey environment with its own enclaves; production needs nothing. Applies to every tenant. |
-| `SBM_BROWSER`                    | `local`           | Where session browsers run: `local` (Chrome on this host) or `browserbase`. The image sets `browserbase`.                                                                                    |
-| `BROWSERBASE_API_KEY`            | (none)            | Required with `SBM_BROWSER=browserbase`.                                                                                                                                                     |
-| `BROWSERBASE_PROJECT_ID`         | (first project)   | Browserbase project for sessions.                                                                                                                                                            |
-| `SBM_BROWSERBASE_TIMEOUT_S`      | (project default) | Maximum Browserbase session length, in seconds.                                                                                                                                              |
-| `SBM_MAX_SESSIONS`               | `8`               | Concurrent agent sessions. Each session gets its own browser. On Browserbase, keep this at or below the plan's concurrency limit.                                                            |
-| `SBM_MAX_SESSIONS_PER_TENANT`    | (equal share)     | Concurrent sessions per tenant. The default is `SBM_MAX_SESSIONS` divided by the number of tenants (the dev `/mcp` endpoint counts as one).                                                  |
-| `SBM_MAX_SESSIONS_PER_PRINCIPAL` | `4`               | Concurrent sessions per principal (`iss` and `sub`) in one tenant. The default is never more than the per-tenant limit. Does not apply to the dev `/mcp` endpoint.                           |
-| `SBM_SESSION_IDLE_S`             | `1800`            | The broker closes a session, and its browser, after this many idle seconds.                                                                                                                  |
-| `SBM_CHROME_ARGS`                | (none)            | Local Chrome only. Extra Chrome flags, separated by spaces.                                                                                                                                  |
-| `SBM_ALLOWED_ORIGINS`            | (none)            | Browser origins that may call the MCP endpoints, separated by commas. Any other `Origin` header gets `403`. See [Origin check](#origin-check).                                               |
+| Variable                         | Default           | Purpose                                                                                                                                                                                               |
+| -------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SBM_TENANTS`                    | (none)            | Path to the tenant file. The image sets `/etc/sbm/tenants.json`; mount the file there.                                                                                                                |
+| `SBM_PUBLIC_URL`                 | (required)        | The origin clients reach the broker at, such as `https://sbm.example.com`. Token audiences are built from it.                                                                                         |
+| `SBM_DEV_SHARED_TOKEN`           | (off)             | `1` serves `/mcp` with the shared token `SBM_HTTP_TOKEN`, and allows tenants with `backend: "mock"`. Development only.                                                                                |
+| `SBM_HTTP_HOST`                  | `127.0.0.1`       | Listen address. The container image sets `0.0.0.0`.                                                                                                                                                   |
+| `SBM_HTTP_PORT`                  | `8080`            | Listen port.                                                                                                                                                                                          |
+| `SBM_STATE_DIR`                  | (none)            | Directory for parked fills. Without it, a restart strands every pending approval.                                                                                                                     |
+| `SBM_STATE_KEY`                  | (none)            | 32-byte key, 64 hex characters or base64. Required with `SBM_STATE_DIR`. Each tenant's key is derived from it.                                                                                        |
+| `TURNKEY_SIGNER_PUBLIC_KEY`      | (SDK default)     | Enclave quorum key that signs secret bundles. Required when `TURNKEY_API_BASE_URL` points at a Turnkey environment with its own enclaves; production needs nothing. Applies to every tenant.          |
+| `SBM_BROWSER`                    | `local`           | Where session browsers run: `local` (Chrome on this host) or `browserbase`. The image sets `browserbase`.                                                                                             |
+| `BROWSERBASE_API_KEY`            | (none)            | Required with `SBM_BROWSER=browserbase`.                                                                                                                                                              |
+| `BROWSERBASE_PROJECT_ID`         | (first project)   | Browserbase project for sessions.                                                                                                                                                                     |
+| `SBM_BROWSERBASE_TIMEOUT_S`      | (project default) | Maximum Browserbase session length, in seconds.                                                                                                                                                       |
+| `SBM_MAX_SESSIONS`               | `8`               | Concurrent agent sessions. Each session gets its own browser. The same limit applies again to browser handles. On Browserbase, keep twice this at or below the plan's concurrency limit.              |
+| `SBM_MAX_SESSIONS_PER_TENANT`    | (equal share)     | Concurrent sessions per tenant, and browser handles per tenant. The default is `SBM_MAX_SESSIONS` divided by the number of tenants (the dev `/mcp` endpoint counts as one).                           |
+| `SBM_MAX_SESSIONS_PER_PRINCIPAL` | `4`               | Concurrent sessions per principal (`iss` and `sub`) in one tenant, and browser handles per principal. The default is never more than the per-tenant limit. Does not apply to the dev `/mcp` endpoint. |
+| `SBM_SESSION_IDLE_S`             | `1800`            | The broker closes a session, and its browser, after this many idle seconds. A browser handle closes after this many seconds without a tool call.                                                      |
+| `SBM_CHROME_ARGS`                | (none)            | Local Chrome only. Extra Chrome flags, separated by spaces.                                                                                                                                           |
+| `SBM_ALLOWED_ORIGINS`            | (none)            | Browser origins that may call the MCP endpoints, separated by commas. Any other `Origin` header gets `403`. See [Origin check](#origin-check).                                                        |
 
 `TURNKEY_API_BASE_URL` and the browser `SBM_*` variables work as in the stdio broker. Only the dev `/mcp` endpoint uses `TURNKEY_API_*` and `TURNKEY_ORGANIZATION_ID`.
 
@@ -139,13 +139,13 @@ The broker caches each JWKS for 10 minutes and refetches it, at most every 30 se
 
 **Scopes.** Each tool needs one scope:
 
-| Scope        | Tools                                                                 |
-| ------------ | --------------------------------------------------------------------- |
-| `sbm:browse` | `navigate`, `snapshot`, `click`, `type_text`, `list_network_requests` |
-| `sbm:fill`   | `fill_secret`, `await_fill`                                           |
-| `sbm:refs`   | `list_secret_refs`                                                    |
+| Scope        | Tools                                                                                                  |
+| ------------ | ------------------------------------------------------------------------------------------------------ |
+| `sbm:browse` | `open_browser`, `close_browser`, `navigate`, `snapshot`, `click`, `type_text`, `list_network_requests` |
+| `sbm:fill`   | `fill_secret`, `await_fill`                                                                            |
+| `sbm:refs`   | `list_secret_refs`                                                                                     |
 
-Opening a session needs at least one of these scopes; without one, the broker answers `403 insufficient_scope` with `scope="sbm:browse"`. Listing tools needs nothing more. An agent that fills secrets needs all three. The broker checks scopes on every request against that request's token, so a client that steps up its token gets the new scopes in the same session.
+The scopes apply the same way to both protocol versions. Opening a session needs at least one of these scopes; without one, the broker answers `403 insufficient_scope` with `scope="sbm:browse"`. Listing tools needs nothing more. An agent that fills secrets needs all three. The broker checks scopes on every request against that request's token, so a client that steps up its token gets the new scopes in the same session.
 
 **Errors.**
 
@@ -154,7 +154,8 @@ Opening a session needs at least one of these scopes; without one, the broker an
 - A tool call without its scope: `403` with `error="insufficient_scope"` and the missing scopes. A batch names every missing scope in one challenge.
 - A JSON-RPC id already in flight in the session, or one id twice in a batch: `409` with JSON-RPC error `-32600`.
 - An unknown tenant: `404`.
-- The broker, the tenant, or the principal at its session limit: `503`.
+- The broker, the tenant, or the principal at its session limit: `503`. At its limit, a principal's own idle sessions that hold no browser are closed first (see [Sessions](#sessions)).
+- A 2026-07-28 request whose `Content-Type` is not `application/json`: `415`.
 
 ## Connect Hermes
 
@@ -189,32 +190,12 @@ The Protected Resource Metadata is not checked. It is public, and browser-based 
 
 ## Protocol versions
 
-The broker serves the 2025 session protocol, up to MCP revision `2025-11-25`: the client sends `initialize` and then sends the `Mcp-Session-Id` header on each request. This is the default for current MCP clients.
+The broker serves both protocol eras on the same endpoint:
 
-The broker does not serve revision `2026-07-28` yet. That revision has no sessions, and the broker keeps one browser per session. A 2026-07-28 request (for example `server/discover`, with the protocol version in the request's `_meta`) gets HTTP `400` with the JSON-RPC error `-32022` (unsupported protocol version):
+- The 2025 session protocol, up to MCP revision `2025-11-25`. The client sends `initialize` and then sends the `Mcp-Session-Id` header on each request. Each session has a browser of its own.
+- Revision `2026-07-28`. There is no session: each request carries the protocol version in its `_meta`, and the broker answers `server/discover`. A request has no browser of its own, so every browser tool needs a `browser_id` (see [Browser handles](#browser-handles)).
 
-```json
-{
-  "jsonrpc": "2.0",
-  "error": {
-    "code": -32022,
-    "message": "Unsupported protocol version: 2026-07-28. This broker serves the 2025-era session protocol only; connect with initialize (protocol version 2025-11-25).",
-    "data": {
-      "supported": [
-        "2025-11-25",
-        "2025-06-18",
-        "2025-03-26",
-        "2024-11-05",
-        "2024-10-07"
-      ],
-      "requested": "2026-07-28"
-    }
-  },
-  "id": 7
-}
-```
-
-A client that negotiates the version (MCP TypeScript SDK v2 `versionNegotiation: { mode: "auto" }`) reads this error and connects with `initialize`. A client that requires 2026-07-28 fails to connect with this error.
+The broker picks the era for each request with the MCP TypeScript SDK's own classifier (`isLegacyRequest`). A client that negotiates the version (SDK v2 `versionNegotiation: { mode: "auto" }`) gets 2026-07-28. A client that requires 2025 or 2026-07-28 gets that version.
 
 ## Sessions
 
@@ -226,6 +207,19 @@ A client that negotiates the version (MCP TypeScript SDK v2 `versionNegotiation:
 - Two requests in flight in one session cannot share a JSON-RPC id. The second would get the first one's response, even without the first one's scope. The broker answers `409`. An id is free again once the server has answered it or the client has cancelled it, even if its client has disconnected by then; a dropped connection alone does not free it, because the server can still answer it. Do not reuse an id across JSON-RPC batches: an answered id is free while its batch stream is still open, and a reuse in a new batch can make the SDK end the new stream early, so that answer is lost. MCP removed batching in the 2025-06-18 spec.
 - A session sees only the pending fills it parked. `await_fill` with a fill id that belongs to another live session, another subject, or another tenant returns `Unknown fill_id`.
 - The broker closes a session's browser when the client sends `DELETE`, when the session is idle for `SBM_SESSION_IDLE_S`, and at shutdown.
+- When a principal opens a session at a session limit, the broker first closes that principal's least recently used session that has no running browser and no request in flight. Some clients open a session for each tool call and never close it; they keep their browser in a [browser handle](#browser-handles). The client of a closed session gets `404` and opens a new one. The broker never closes another principal's session to make room.
+
+## Browser handles
+
+A browser handle is a browser that does not belong to one connection. `open_browser` returns a `browser_id`. Every browser tool (`navigate`, `snapshot`, `click`, `type_text`, `fill_secret`, `await_fill`, `list_network_requests`) takes an optional `browser_id` and then acts in that browser. `close_browser` with the `browser_id` closes it.
+
+- Use handles with a 2026-07-28 client: it has no session, so a browser tool without a `browser_id` fails. Use them also with a 2025 client that opens a new session for each tool call (the Arcade gateway). A browser tied to such a session is gone before the next call.
+- On a 2025 session, a call without `browser_id` uses the session's own browser, as before. The session's browser and its handles are separate browsers.
+- A handle has its own browser, redaction registry, element uids, and pending fills, as a session does. `fill_secret` parks a fill on the handle, and `await_fill` with that handle's `browser_id` redeems it from any connection.
+- A handle belongs to the tenant, subject (`iss` and `sub`), and OAuth client that opened it, the same rule as a session. For anyone else, a `browser_id` gives the same `Unknown browser_id` error as an id that was never issued. The id holds 192 random bits.
+- The broker closes a handle on `close_browser`, after `SBM_SESSION_IDLE_S` seconds without a tool call, and at shutdown. A call in progress keeps the handle open. Pending fills of a closed handle stay in the store: another browser of the same tenant and subject can claim them by `fill_id`.
+- Handles have their own copy of the session limits: `SBM_MAX_SESSIONS` in total, `SBM_MAX_SESSIONS_PER_TENANT` per tenant, and `SBM_MAX_SESSIONS_PER_PRINCIPAL` per principal. At a limit, `open_browser` fails and asks the agent to close a browser. A principal at its handle limit can still open a session to call `close_browser`.
+- The browser starts with the first tool call that needs it, not with `open_browser`.
 
 ## Restarts and pending fills
 

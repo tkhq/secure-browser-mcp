@@ -1,29 +1,29 @@
-import type { RedactionRegistry } from "@turnkey/browser-secrets";
 import type { ZodObject, ZodRawShape, output } from "zod";
 
 import type { Scope } from "../auth/scopes.js";
-import type { PendingFills } from "../broker/pending-store.js";
 import type { SecretsClient } from "../broker/secrets-client.js";
-import type { BrowserSession } from "../browser/session.js";
+import type { BrowserContext, BrowserScope } from "../browsers.js";
 
 export type { PendingFill } from "../broker/pending-store.js";
 
-/**
- * Shared wiring every tool handler receives. One context per agent session:
- * `session`, `registry`, and `pendingFills` belong to that session alone;
- * `secrets` is shared by every session of the broker.
- */
-export type ToolContext = {
+/** The broker side of a tool call: shared by every browser. */
+export type BrokerContext = {
   secrets: SecretsClient;
   backend: "mock" | "turnkey";
-  session: BrowserSession;
-  registry: RedactionRegistry;
-  /** This session's parked fills (see src/broker/pending-store.ts). */
-  pendingFills: PendingFills;
+  /** The browsers this connection's caller can open, reach, and close. */
+  browsers: BrowserScope;
   /** Dashboard link for an approval-gated activity; undefined when the
    * backend has no dashboard (mock) or the API host is unknown. */
   approvalUrl?: (activityId: string) => string | undefined;
 };
+
+/**
+ * Shared wiring every tool handler receives. `session`, `registry`, and
+ * `pendingFills` belong to one browser: the one the call's `browser_id`
+ * names, or the connection's own (src/browsers.ts). `secrets` is shared by
+ * every browser of the broker.
+ */
+export type ToolContext = BrokerContext & BrowserContext;
 
 /**
  * Tool results are plain JSON values. `server.ts` owns serialization: every
@@ -34,6 +34,9 @@ export type ToolDef<Shape extends ZodRawShape = ZodRawShape> = {
   name: string;
   /** The OAuth scope a hosted caller needs for this tool. */
   scope: Scope;
+  /** Whether the tool acts on a browser. server.ts gives such a tool a
+   * `browser_id` argument and runs it in that browser. */
+  browser: boolean;
   description: string;
   inputSchema: Shape;
   handler: (
@@ -46,6 +49,7 @@ export type ToolDef<Shape extends ZodRawShape = ZodRawShape> = {
 export type AnyToolDef = {
   name: string;
   scope: Scope;
+  browser: boolean;
   description: string;
   inputSchema: ZodRawShape;
   handler: (ctx: ToolContext, args: never) => Promise<unknown>;

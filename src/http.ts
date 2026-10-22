@@ -8,15 +8,22 @@
  *
  * Each tenant in SBM_TENANTS has its own endpoint, /t/{id}/mcp, with its
  * own Turnkey key and pending-fill store, and the broker is an OAuth 2.1
- * resource server for it. Each MCP session gets its own ToolContext (its
- * own browser, redaction registry, and view of the pending fills) and is
- * bound to the tenant, subject, and OAuth client that opened it. Closing
- * the session (DELETE, idle timeout, or shutdown) closes its browser.
+ * resource server for it.
  *
- * Protocol: the 2025-era session protocol (initialize, Mcp-Session-Id),
- * through to 2025-11-25. A 2026-07-28 request (no session, per-request
- * `_meta` envelope) gets an UnsupportedProtocolVersion error; see
- * rejectModern below.
+ * Protocol: both eras, on the same endpoint.
+ *
+ *  - 2025-era sessions (initialize, Mcp-Session-Id), through to 2025-11-25.
+ *    Each session has its own browser, redaction registry, and view of the
+ *    pending fills, and is bound to the tenant, subject, and OAuth client
+ *    that opened it. Closing the session (DELETE, idle timeout, or
+ *    shutdown) closes its browser.
+ *  - 2026-07-28 (no session, per-request `_meta` envelope), through the
+ *    SDK's createMcpHandler. A request has no browser of its own.
+ *
+ * Both eras can open browser handles (src/browsers.ts) with open_browser
+ * and name them by browser_id. A handle is bound like a session and
+ * outlives the connection that opened it, which 2026-07-28 clients and
+ * 2025 clients that open a session per call (the Arcade gateway) need.
  *
  * Configuration: docs/HOSTED.md.
  */
@@ -31,14 +38,17 @@ import { join } from "node:path";
 
 import {
   NodeStreamableHTTPServerTransport,
+  toNodeHandler,
   toWebRequest,
   type NodeIncomingMessageLike,
+  type NodeMcpRequestHandler,
 } from "@modelcontextprotocol/node";
 import {
+  createMcpHandler,
   isInitializeRequest,
+  isJsonContentType,
   isLegacyRequest,
-  PROTOCOL_VERSION_META_KEY,
-  SUPPORTED_PROTOCOL_VERSIONS,
+  type AuthInfo,
 } from "@modelcontextprotocol/server";
 
 import {
@@ -57,6 +67,12 @@ import {
   type TenantConfig,
 } from "./auth/tenants.js";
 import { JwksCache, verifyAccessToken } from "./auth/tokens.js";
+import {
+  BrowserHandles,
+  browserScope,
+  type BrowserContext,
+  type HandleOwner,
+} from "./browsers.js";
 import { watchGetStream } from "./get-stream.js";
 import { InFlightIds } from "./inflight.js";
 import {
@@ -67,18 +83,16 @@ import {
   tenantStateKey,
 } from "./broker/pending-store.js";
 import {
+  brokerContext,
+  browserContext,
   makeBroker,
-  sessionContext,
   tenantSecretsClient,
   type Broker,
 } from "./runtime.js";
 import { createServer, TOOLS } from "./server.js";
-import type { ToolContext } from "./tools/tool.js";
+import type { BrokerContext } from "./tools/tool.js";
 
 const MAX_BODY_BYTES = 1_000_000;
-
-/** JSON-RPC code for UnsupportedProtocolVersion (MCP 2026-07-28). */
-const UNSUPPORTED_PROTOCOL_VERSION = -32022;
 
 /** The dev endpoint's id. Not a valid tenant id, so it cannot collide. */
 const DEV_ENDPOINT_ID = "_shared-token";
@@ -110,7 +124,8 @@ type TenantEndpoint = Endpoint & { metadata: { uri: string; doc: object } };
 
 type Session = {
   transport: NodeStreamableHTTPServerTransport;
-  ctx: ToolContext;
+  /** The session's own browser. */
+  browser: BrowserContext;
   lastSeen: number;
   endpoint: string;
   principal: string;
@@ -328,48 +343,6 @@ function originAllowed(req: IncomingMessage, allowed: Set<string>): boolean {
   return origin === undefined || allowed.has(origin);
 }
 
-/**
- * Answer a 2026-07-28 (stateless, `server/discover`) request. The broker
- * serves only the 2025-era session protocol: one browser per
- * `Mcp-Session-Id`. The 2026 revision has no sessions, so it needs a
- * different browser-handle model, which is not built yet.
- *
- * The answer is the spec's UnsupportedProtocolVersion error, listing the
- * 2025-era versions the broker serves. A client in version-negotiation
- * `auto` mode reads this and falls back to `initialize`; a client pinned to
- * 2026-07-28 fails with a clear error instead of hanging.
- */
-function rejectModern(
-  res: ServerResponse,
-  req: IncomingMessage,
-  body: unknown,
-) {
-  const msg = (Array.isArray(body) ? body[0] : body) as
-    { id?: unknown; params?: { _meta?: Record<string, unknown> } } | undefined;
-  const claimed = msg?.params?._meta?.[PROTOCOL_VERSION_META_KEY];
-  const header = req.headers["mcp-protocol-version"];
-  const requested =
-    typeof claimed === "string"
-      ? claimed
-      : typeof header === "string"
-        ? header
-        : "unknown";
-  const id =
-    typeof msg?.id === "string" || typeof msg?.id === "number" ? msg.id : null;
-  send(res, 400, {
-    jsonrpc: "2.0",
-    error: {
-      code: UNSUPPORTED_PROTOCOL_VERSION,
-      message:
-        `Unsupported protocol version: ${requested}. This broker serves ` +
-        "the 2025-era session protocol only; connect with initialize " +
-        `(protocol version ${SUPPORTED_PROTOCOL_VERSIONS[0]}).`,
-      data: { supported: [...SUPPORTED_PROTOCOL_VERSIONS], requested },
-    },
-    id,
-  });
-}
-
 function refuse(
   res: ServerResponse,
   status: 400 | 401 | 403,
@@ -426,6 +399,8 @@ async function main(): Promise<void> {
   const port = envInt("SBM_HTTP_PORT", 8080);
   const maxSessions = envInt("SBM_MAX_SESSIONS", 8);
   const idleMs = envInt("SBM_SESSION_IDLE_S", 1800) * 1_000;
+  // Sweep at least as often as the idle timeout, so a short one holds.
+  const sweepMs = Math.min(60_000, idleMs);
   const allowedOrigins = parseAllowedOrigins(
     process.env["SBM_ALLOWED_ORIGINS"],
   );
@@ -505,14 +480,59 @@ async function main(): Promise<void> {
   );
 
   const sessions = new Map<string, Session>();
-  const isLive = (owner: string) => sessions.has(owner);
+  // Browser handles have their own copy of the session limits, so a caller
+  // that holds its limit of handles can still open a session to close one.
+  const handles = new BrowserHandles(
+    {
+      max: maxSessions,
+      perEndpoint: maxPerTenant,
+      // The dev endpoint has one principal, so only the tenant cap applies.
+      perPrincipal: (owner) =>
+        owner.endpoint === DEV_ENDPOINT_ID ? Infinity : maxPerPrincipal,
+    },
+    idleMs,
+  );
+  // Sessions and handles both own pending fills: session ids are UUIDs and
+  // handle ids start with br_, so the two cannot collide.
+  const isLive = (owner: string) => sessions.has(owner) || handles.has(owner);
 
   const closeSession = async (id: string) => {
     const s = sessions.get(id);
     if (!s) return;
     sessions.delete(id);
-    await s.ctx.session.close().catch(() => {});
+    await s.browser.session.close().catch(() => {});
     await s.transport.close().catch(() => {});
+  };
+
+  /** The browsers a connection of `caller` reaches: its handles, and the
+   * connection's own browser when it has one. */
+  const scopeFor = (
+    endpoint: Endpoint,
+    caller: Caller,
+    implicit?: BrowserContext,
+  ) => {
+    const owner: HandleOwner = {
+      endpoint: endpoint.id,
+      principal: caller.principal,
+      client: caller.client,
+    };
+    return brokerContext(
+      endpoint.broker,
+      browserScope({
+        handles,
+        owner,
+        make: (browserId) =>
+          browserContext(
+            endpoint.broker,
+            scopedFills(endpoint.store, {
+              owner: browserId,
+              principal: caller.principal,
+              isLive,
+            }),
+          ),
+        implicit,
+      }),
+    );
   };
 
   const openSession = async (
@@ -527,14 +547,14 @@ async function main(): Promise<void> {
       principal: caller.principal,
       isLive,
     });
-    const ctx = sessionContext(endpoint.broker, fills);
+    const browser = browserContext(endpoint.broker, fills);
     const inFlight = new InFlightIds();
     const transport = new NodeStreamableHTTPServerTransport({
       sessionIdGenerator: () => id,
       onsessioninitialized: () => {
         sessions.set(id, {
           transport,
-          ctx,
+          browser,
           lastSeen: Date.now(),
           endpoint: endpoint.id,
           principal: caller.principal,
@@ -544,7 +564,7 @@ async function main(): Promise<void> {
       },
     });
     transport.onclose = () => void closeSession(id);
-    await createServer(ctx).connect(transport);
+    await createServer(scopeFor(endpoint, caller, browser)).connect(transport);
     // Watch what passes between the transport and the server, so an id is
     // released only when the server is done with it.
     const deliver = transport.onmessage;
@@ -563,6 +583,72 @@ async function main(): Promise<void> {
     return transport;
   };
 
+  /**
+   * Close the caller's least recently used session that holds nothing: no
+   * running browser and no request in flight. A GET stream does not count:
+   * the broker sends no server-initiated messages. Some 2025 clients
+   * (the Arcade gateway) open a session for each tool call and never close
+   * it, keeping their state in browser handles. Without this they would
+   * reach their session limit after a few calls. The client of a closed
+   * session gets 404 and opens a new one. Returns whether one was closed.
+   */
+  const reclaimSession = async (endpoint: Endpoint, caller: Caller) => {
+    let oldest: [string, Session] | undefined;
+    for (const entry of sessions) {
+      const s = entry[1];
+      if (
+        s.endpoint === endpoint.id &&
+        s.principal === caller.principal &&
+        s.client === caller.client &&
+        !s.browser.session.isStarted() &&
+        s.inFlight.idle &&
+        (!oldest || s.lastSeen < oldest[1].lastSeen)
+      ) {
+        oldest = entry;
+      }
+    }
+    if (!oldest) return false;
+    await closeSession(oldest[0]);
+    return true;
+  };
+
+  /** Why `caller` cannot open another session, or undefined if it can. */
+  const sessionLimit = (endpoint: Endpoint, caller: Caller) => {
+    if (sessions.size >= maxSessions) {
+      return "Broker is at its session limit";
+    }
+    const tenantSessions = [...sessions.values()].filter(
+      (s) => s.endpoint === endpoint.id,
+    );
+    const callerSessions = tenantSessions.filter(
+      (s) => s.principal === caller.principal,
+    ).length;
+    // The dev endpoint has one principal, so only the tenant cap applies.
+    if (endpoint !== dev && callerSessions >= maxPerPrincipal) {
+      return "This caller is at its session limit";
+    }
+    if (tenantSessions.length >= maxPerTenant) {
+      return "This tenant is at its session limit";
+    }
+    return undefined;
+  };
+
+  // The 2026-07-28 leg. Era routing happens in handleMcp, so this handler
+  // sees modern requests only. Each request gets a fresh server over the
+  // caller's browser scope, which handleMcp passes in authInfo.
+  const modern: NodeMcpRequestHandler = toNodeHandler(
+    createMcpHandler(
+      ({ authInfo }) =>
+        createServer((authInfo?.extra as { ctx: BrokerContext }).ctx),
+      {
+        legacy: "reject",
+        maxRequestBodySize: MAX_BODY_BYTES,
+        onerror: (err) =>
+          console.error("secure-browser-mcp: modern request failed:", err),
+      },
+    ),
+  );
+
   const handleMcp = async (
     endpoint: Endpoint,
     req: IncomingMessage,
@@ -572,20 +658,18 @@ async function main(): Promise<void> {
     if (!caller) return;
     const body = req.method === "POST" ? await readJson(req) : undefined;
 
-    // Era routing (SDK v2 legacy-clients guide): 2025-era traffic goes to the
-    // sessionful transports below. isLegacyRequest is the SDK's own
-    // classifier, so this branch agrees with what createMcpHandler would do.
+    // Era routing (SDK v2 legacy-clients guide): 2025-era traffic goes to
+    // the sessionful transports below, the rest to the modern leg.
+    // isLegacyRequest is the SDK's own classifier, so this branch agrees
+    // with what createMcpHandler would do.
     // GET and DELETE are session operations and always classify legacy.
     // The cast only bridges `method?: string` under exactOptionalPropertyTypes.
-    if (
-      req.method === "POST" &&
-      !(await isLegacyRequest(
+    const legacy =
+      req.method !== "POST" ||
+      (await isLegacyRequest(
         await toWebRequest(req as NodeIncomingMessageLike, body),
         body,
-      ))
-    ) {
-      return rejectModern(res, req, body);
-    }
+      ));
 
     // Checked against the token sent with each request, so a session's
     // rights follow its current token.
@@ -596,6 +680,22 @@ async function main(): Promise<void> {
         description: `This tool requires ${missing.join(" ")}`,
         scopes: missing,
       });
+    }
+
+    if (!legacy) {
+      // The SDK leaves this check to a hand-wired modern leg.
+      if (!isJsonContentType(req.headers["content-type"])) {
+        return rpcError(res, 415, "Content-Type must be application/json");
+      }
+      const authInfo: AuthInfo = {
+        token: "",
+        clientId: caller.client ?? "",
+        scopes: [...caller.scopes],
+        extra: { ctx: scopeFor(endpoint, caller) },
+      };
+      // toNodeHandler forwards req.auth as the handler's authInfo.
+      (req as IncomingMessage & { auth?: AuthInfo }).auth = authInfo;
+      return modern(req as NodeIncomingMessageLike, res, body);
     }
 
     const sessionId = req.headers["mcp-session-id"];
@@ -647,22 +747,13 @@ async function main(): Promise<void> {
         scopes: ["sbm:browse"],
       });
     }
-    if (sessions.size >= maxSessions) {
-      return rpcError(res, 503, "Broker is at its session limit");
+    // At a limit, the caller's own idle, browserless sessions make room
+    // first. Other callers' sessions are never closed for it.
+    let limit = sessionLimit(endpoint, caller);
+    while (limit && (await reclaimSession(endpoint, caller))) {
+      limit = sessionLimit(endpoint, caller);
     }
-    const tenantSessions = [...sessions.values()].filter(
-      (s) => s.endpoint === endpoint.id,
-    );
-    const callerSessions = tenantSessions.filter(
-      (s) => s.principal === caller.principal,
-    ).length;
-    // The dev endpoint has one principal, so only the tenant cap applies.
-    if (endpoint !== dev && callerSessions >= maxPerPrincipal) {
-      return rpcError(res, 503, "This caller is at its session limit");
-    }
-    if (tenantSessions.length >= maxPerTenant) {
-      return rpcError(res, 503, "This tenant is at its session limit");
-    }
+    if (limit) return rpcError(res, 503, limit);
     const transport = await openSession(endpoint, caller);
     await transport.handleRequest(req, res, body);
   };
@@ -724,7 +815,8 @@ async function main(): Promise<void> {
     for (const [id, s] of sessions) {
       if (s.lastSeen < cutoff) void closeSession(id);
     }
-  }, 60_000);
+    void handles.sweep();
+  }, sweepMs);
   sweep.unref();
 
   await new Promise<void>((resolve) => http.listen(port, host, resolve));
@@ -737,9 +829,10 @@ async function main(): Promise<void> {
   // Pending fills stay in the stores; browsers do not outlive the process.
   const shutdown = () => {
     http.close();
-    void Promise.all([...sessions.keys()].map(closeSession)).finally(() =>
-      process.exit(0),
-    );
+    void Promise.all([
+      ...[...sessions.keys()].map(closeSession),
+      handles.closeAll(),
+    ]).finally(() => process.exit(0));
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);

@@ -86,11 +86,14 @@ For a real-world walkthrough — an agent paying a Stripe test checkout with a c
 
 ## Development
 
-| Path             | What it holds                                                                                     |
-| ---------------- | ------------------------------------------------------------------------------------------------- |
-| `src/broker/`    | Secret refs, the `SecretsClient` interface, Turnkey and mock backends, destination-binding policy |
-| `src/browser/`   | Browser ownership and CDP secret injection                                                        |
-| `src/redaction/` | The scrub layer every tool result passes through                                                  |
-| `src/tools/`     | One file per MCP tool                                                                             |
-| `test/fixtures/` | The demo storefront (login, checkout, receipt)                                                    |
-| `docs/`          | Design, threat model, hosted broker, Stripe demo walkthrough                                      |
+| Path              | What it holds                                                                         |
+| ----------------- | ------------------------------------------------------------------------------------- |
+| `src/broker/`     | Secret refs, the `SecretsClient` interface, Turnkey and mock backends, pending fills  |
+| `src/browser/`    | Browser ownership and CDP secret injection                                            |
+| `src/tools/`      | One file per MCP tool                                                                 |
+| `src/browsers.ts` | Browser handles: browsers named by `browser_id`, bound to the caller that opened them |
+| `src/auth/`       | Per-tenant OAuth: tenant config, token checks, scopes, the 401 challenge              |
+| `test/fixtures/`  | The demo storefront (login, checkout, receipt)                                        |
+| `docs/`           | Design, threat model, hosted broker, Stripe demo walkthrough                          |
+
+Destination-binding checks and the redaction layer that every tool result passes through come from [`@turnkey/browser-secrets`](https://www.npmjs.com/package/@turnkey/browser-secrets).

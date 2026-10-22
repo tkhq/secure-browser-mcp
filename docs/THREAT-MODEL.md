@@ -63,6 +63,7 @@ Tenant isolation covers:
 
 - A caller reaches only its tenant's secrets, through the tenant's API key. Turnkey policy on that key bounds what it can export. Without per-tenant keys scoped by policy, tenant separation rests on the broker's routing alone.
 - A session answers only to the tenant, subject (`iss`, `sub`), and OAuth client that opened it.
+- A browser handle (`browser_id`) answers only to the tenant, subject, and OAuth client that opened it. For anyone else it does not exist.
 - A parked fill belongs to one tenant and one subject, and is stored under the tenant's derived key. No other tenant can see or redeem it, and no other subject can claim it.
 - With `allowedClients`, tokens issued to other clients are refused.
 
@@ -76,7 +77,7 @@ It does not cover:
 
 **Parked fills hold key material.** A parked fill contains the ephemeral private key for an export that approvers may still approve. Anyone with both the state volume and `SBM_STATE_KEY` can decrypt that export after approval. The broker encrypts each parked fill with AES-256-GCM under its tenant's key and binds it to its file name, and drops parked fills after 24 hours.
 
-**Sessions.** Each MCP session gets its own browser. With local Chrome, the broker drives it over a pipe, so "nothing else attached" holds per session. With Browserbase, the broker cannot verify that nothing else is attached: Browserbase can attach, and anyone holding the session's connect URL can too. The broker never logs or returns that URL, and it never requests live-view or debug URLs. A session sees only its own pending fills. A fill whose session is gone (after a restart or reconnect) can be claimed by a session of the same tenant and subject that presents its `fill_id`. The broker gave that random id only to the original session.
+**Sessions.** Each MCP session, and each browser handle, gets its own browser. With local Chrome, the broker drives it over a pipe, so "nothing else attached" holds per session. With Browserbase, the broker cannot verify that nothing else is attached: Browserbase can attach, and anyone holding the session's connect URL can too. The broker never logs or returns that URL, and it never requests live-view or debug URLs. A session sees only its own pending fills. A fill whose session is gone (after a restart or reconnect) can be claimed by a session of the same tenant and subject that presents its `fill_id`. The broker gave that random id only to the original session.
 
 **Browser callers.** The broker refuses any request whose `Origin` header is not in `SBM_ALLOWED_ORIGINS` (empty by default), before it checks the bearer token. A web page that a user opens cannot use the user's browser to call a broker on a private network (DNS rebinding). Non-browser clients send no `Origin` and depend on the bearer token alone.
 

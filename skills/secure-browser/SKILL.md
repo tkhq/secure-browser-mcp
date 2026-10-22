@@ -38,6 +38,10 @@ Snapshots and fills target the main frame only. Cross-origin iframe inputs, incl
 6. `snapshot` to verify: the filled field's value reads `[REDACTED:secret-filled-field]`.
 7. `click` the submit button, then `snapshot` (repeat with short waits) until the page moves on.
 
+## Browser handles
+
+If a browser tool says it needs a `browser_id`, or the page you navigated to is gone on the next call (`about:blank`), your connection keeps no browser between calls. Call `open_browser` once, then pass its `browser_id` to every browser tool, including `fill_secret` and `await_fill`. Call `close_browser` when the task is done.
+
 ## Consensus approvals
 
 Some secrets need multi-party approval to export. `fill_secret` then returns `status: "pending_approval"` with a `fill_id`, a Turnkey `activity_id`, and usually an `approval_url` instead of filling. This is normal, not an error:

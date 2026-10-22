@@ -1,6 +1,16 @@
 # Tool reference
 
-Seven working tools and one registered, unavailable stub. All results are redacted server-side before you see them.
+Nine working tools and one registered, unavailable stub. All results are redacted server-side before you see them.
+
+Every browser tool (navigate, snapshot, click, type_text, fill_secret, await_fill, list_network_requests) also takes an optional `browser_id` from `open_browser`. With it, the tool acts in that browser. Without it, the tool uses the connection's own browser. A connection with no browser of its own (an MCP 2026-07-28 client) must pass `browser_id`.
+
+## open_browser
+
+No arguments. Returns `{ browser_id, idle_timeout_seconds }`. Opens a broker-owned browser that outlives this connection: pass the `browser_id` to every later browser tool, from any connection of the same caller. Each browser has its own pages, element uids, redaction, and pending fills. The browser closes after `idle_timeout_seconds` without a tool call. Fails when the caller holds its limit of browsers; close one first.
+
+## close_browser
+
+`{ browser_id: string }` → `{ closed }`. Closes the browser. A fill still pending approval stays valid: pass its `fill_id` to `await_fill` in another browser. An unknown, closed, or timed-out `browser_id` fails with `Unknown browser_id`.
 
 ## list_secret_refs
 

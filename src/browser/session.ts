@@ -64,6 +64,11 @@ export class BrowserSession {
     return this.page;
   }
 
+  /** Whether a browser is running, so the session holds one. */
+  isStarted(): boolean {
+    return this.page !== undefined && !this.page.isClosed();
+  }
+
   currentPage(): Page | undefined {
     return this.page;
   }

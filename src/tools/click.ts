@@ -5,6 +5,7 @@ import { defineTool } from "./tool.js";
 export const click = defineTool({
   name: "click",
   scope: "sbm:browse",
+  browser: true,
   description: "Click an element identified by its snapshot uid.",
   inputSchema: {
     element_uid: z.string(),

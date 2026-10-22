@@ -29,6 +29,8 @@ test("lists the full tool surface, without evaluate_script", async () => {
   const msg = await client.request("tools/list");
   const names = (msg.result?.tools ?? []).map((t) => t.name);
   expect(names).toEqual([
+    "open_browser",
+    "close_browser",
     "list_secret_refs",
     "navigate",
     "snapshot",
@@ -236,6 +238,54 @@ test("redacts a card number the page splits across fields and the URL", async ()
     `${FIXTURE_ORIGIN}/checkout-split?card=[REDACTED:${card!.secretId}]`,
   );
   expect(client.transcript).not.toMatch(/4242(%20|\D)?4242(%20|\D)?4242/);
+});
+
+test("a browser_id names a browser of its own, beside the session's", async () => {
+  const refs = (await client.callTool("list_secret_refs")).body as {
+    refs: { secretId: string; name?: string }[];
+  };
+  const demo = refs.refs.find((r) => r.name === "demo-login-password")!;
+  await client.callTool("navigate", { url: `${FIXTURE_ORIGIN}/checkout` });
+
+  const opened = await client.callTool("open_browser");
+  expect(opened.isError).toBe(false);
+  const { browser_id } = opened.body as { browser_id: string };
+  expect(browser_id).toMatch(/^br_[A-Za-z0-9_-]{32}$/);
+
+  await client.callTool("navigate", {
+    url: `${FIXTURE_ORIGIN}/login`,
+    browser_id,
+  });
+  const snap = (await client.callTool("snapshot", { browser_id })).body as {
+    url: string;
+    elements: { uid: string; type?: string; value?: string }[];
+  };
+  expect(snap.url).toContain("/login");
+  const password = snap.elements.find((e) => e.type === "password")!;
+  const fill = await client.callTool("fill_secret", {
+    secret_id: demo.secretId,
+    element_uid: password.uid,
+    browser_id,
+  });
+  expect(fill.body).toMatchObject({ filled: true });
+
+  // The session's own browser did not move.
+  const own = (await client.callTool("snapshot")).body as { url: string };
+  expect(own.url).toContain("/checkout");
+
+  const after = (await client.callTool("snapshot", { browser_id })).body as {
+    elements: { uid: string; value?: string }[];
+  };
+  expect(after.elements.find((e) => e.uid === password.uid)?.value).toBe(
+    "[REDACTED:secret-filled-field]",
+  );
+
+  expect((await client.callTool("close_browser", { browser_id })).body).toEqual(
+    { closed: browser_id },
+  );
+  const gone = await client.callTool("snapshot", { browser_id });
+  expect(gone.isError).toBe(true);
+  expect(gone.text).toContain("Unknown browser_id");
 });
 
 test("the plaintext never appeared anywhere in server output", () => {

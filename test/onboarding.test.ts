@@ -11,6 +11,7 @@ import {
 } from "../src/broker/pending-store.js";
 import { LocalChromeHost } from "../src/browser/hosts.js";
 import { BrowserSession } from "../src/browser/session.js";
+import { BrowserHandles, browserScope } from "../src/browsers.js";
 
 const secret = "canary-never-print-this";
 const env = {
@@ -141,6 +142,16 @@ for (const backend of ["mock", "turnkey"] as const) {
       {
         backend,
         secrets,
+        browsers: browserScope({
+          handles: new BrowserHandles(
+            { max: 1, perEndpoint: 1, perPrincipal: () => 1 },
+            60_000,
+          ),
+          owner: { endpoint: "test", principal: "test", client: undefined },
+          make: () => {
+            throw new Error("unused");
+          },
+        }),
         session: new BrowserSession(
           new LocalChromeHost({ executablePath: "/unused" }),
         ),

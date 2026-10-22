@@ -30,6 +30,7 @@ import { MockAuthServer } from "./mock-auth-server.js";
  *  - delta trusts A, for tests that need sessions of their own. Listing its
  *    secrets takes LIST_DELAY_MS.
  *  - epsilon trusts A and sets allowedClients.
+ *  - zeta, eta, and theta trust A, for the browser-handle tests.
  */
 
 const DEMO_PLAINTEXT = "mock-demo-p@ssw0rd-1234"; // mock-secrets.ts seed
@@ -75,8 +76,8 @@ async function startBroker() {
       SBM_HTTP_PORT: String(port),
       SBM_STATE_DIR: stateDir,
       SBM_STATE_KEY: stateKey,
-      // Five tenants get five slots each, and a principal the default four.
-      SBM_MAX_SESSIONS: "25",
+      // Eight tenants get five slots each, and a principal the default four.
+      SBM_MAX_SESSIONS: "40",
       SBM_ALLOWED_ORIGINS: ALLOWED_ORIGIN,
       SBM_MOCK_CONSENSUS: "demo-login-password",
       SBM_MOCK_CONSENSUS_DELAY_MS: "2000",
@@ -110,8 +111,18 @@ type Session = {
   ) => Promise<{ isError: boolean; body: any; text: string }>;
 };
 
-async function connect(tenant: string, bearer: string): Promise<Session> {
-  const client = new Client({ name: "oauth-test", version: "0" });
+/** A 2025-era session, or with `modern` a client pinned to 2026-07-28. */
+async function connect(
+  tenant: string,
+  bearer: string,
+  opts: { modern?: boolean } = {},
+): Promise<Session> {
+  const client = new Client(
+    { name: "oauth-test", version: "0" },
+    opts.modern
+      ? { versionNegotiation: { mode: { pin: "2026-07-28" } } }
+      : undefined,
+  );
   await client.connect(
     new StreamableHTTPClientTransport(new URL(mcpUrl(tenant)), {
       requestInit: { headers: { authorization: `Bearer ${bearer}` } },
@@ -260,6 +271,9 @@ beforeAll(async () => {
           issuers: [a],
           allowedClients: ["agent-app"],
         },
+        { id: "zeta", backend: "mock", issuers: [a] },
+        { id: "eta", backend: "mock", issuers: [a] },
+        { id: "theta", backend: "mock", issuers: [a] },
       ],
     }),
   );
@@ -777,14 +791,17 @@ test("a GET stream the client drops is released, and its expiry with it", async 
 }, 15_000);
 
 test("one principal or tenant cannot take every session slot", async () => {
-  /** Open sessions until refused; returns how many opened, and the
-   * refusal. */
+  /** Open sessions that each hold a browser until refused; returns how
+   * many opened, and the refusal. */
   const fill = async (bearer: string) => {
     let opened = 0;
     let res: Response;
     while ((res = await rpc("beta", bearer, initialize)).status === 200) {
       opened++;
       expect(opened).toBeLessThanOrEqual(5);
+      const id = res.headers.get("mcp-session-id")!;
+      const navigate = toolCall("navigate", { url: `${FIXTURE_ORIGIN}/login` });
+      expect((await rpc("beta", bearer, navigate, id)).status).toBe(200);
     }
     expect(res.status).toBe(503);
     return { opened, refusal: await res.text() };
@@ -803,6 +820,112 @@ test("one principal or tenant cannot take every session slot", async () => {
   expect(
     (await rpc("alpha", await token(asA, "alpha"), initialize)).status,
   ).toBe(200);
+}, 60_000);
+
+test("at its session limit, a caller's idle sessions without a browser make room", async () => {
+  const bearer = await token(asA, "zeta", { sub: "per-call" });
+  const ids: string[] = [];
+  for (let i = 0; i < 6; i++) ids.push(await rawSession("zeta", bearer));
+  // Four live at most: the two oldest were closed for the newest two.
+  const list = { method: "tools/list" };
+  const status = async (id: string) =>
+    (await rpc("zeta", bearer, list, id)).status;
+  expect(await status(ids[0]!)).toBe(404);
+  expect(await status(ids[1]!)).toBe(404);
+  for (const id of ids.slice(2)) expect(await status(id)).toBe(200);
+  // Another caller's sessions are never closed to make room.
+  const other = await token(asA, "zeta", { sub: "neighbor" });
+  const theirs = await rawSession("zeta", other);
+  for (let i = 0; i < 4; i++) await rawSession("zeta", bearer);
+  expect((await rpc("zeta", other, list, theirs)).status).toBe(200);
+});
+
+test("a browser_id answers only to the tenant, subject, and client that opened it, in both eras", async () => {
+  const ivy = (tenant: string, claims: Record<string, unknown>, sub = "ivy") =>
+    token(asA, tenant, { sub, claims });
+  const owner = await connect("eta", await ivy("eta", { azp: "app-1" }), {
+    modern: true,
+  });
+  const { browser_id } = (await owner.call("open_browser")).body;
+  await owner.call("navigate", {
+    url: `${FIXTURE_ORIGIN}/login`,
+    browser_id,
+  });
+
+  // To anyone else the id looks exactly like one that was never minted.
+  const never = `br_${randomBytes(24).toString("base64url")}`;
+  const notFound = (id: string) =>
+    `Unknown browser_id: ${id}. It was closed, timed out, or belongs to ` +
+    "another caller. Call open_browser for a new one.";
+  const strangers: [string, string][] = [
+    ["eta", await ivy("eta", { azp: "app-1" }, "mallory")],
+    ["eta", await ivy("eta", { azp: "app-2" })],
+    ["eta", await ivy("eta", {})],
+    ["theta", await ivy("theta", { azp: "app-1" })],
+  ];
+  for (const [tenant, bearer] of strangers) {
+    for (const modern of [true, false]) {
+      const s = await connect(tenant, bearer, { modern });
+      for (const id of [browser_id, never]) {
+        const snap = await s.call("snapshot", { browser_id: id });
+        expect(snap.isError).toBe(true);
+        expect(snap.text).toBe(notFound(id));
+        const close = await s.call("close_browser", { browser_id: id });
+        expect(close.text).toBe(notFound(id));
+      }
+      await s.client.close();
+    }
+  }
+
+  // The owner, from a 2025 session this time, still has its browser.
+  const again = await connect("eta", await ivy("eta", { azp: "app-1" }));
+  const snap = (await again.call("snapshot", { browser_id })).body;
+  expect(snap.url).toContain("/login");
+  expect((await again.call("close_browser", { browser_id })).isError).toBe(
+    false,
+  );
+  await again.client.close();
+  await owner.client.close();
+}, 60_000);
+
+test("one principal cannot open more browser handles than its limit", async () => {
+  const s = await connect(
+    "delta",
+    await token(asA, "delta", { sub: "hoard" }),
+    {
+      modern: true,
+    },
+  );
+  const ids: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    const opened = await s.call("open_browser");
+    expect(opened.isError).toBe(false);
+    ids.push(opened.body.browser_id);
+  }
+  expect(new Set(ids).size).toBe(4);
+  const refused = await s.call("open_browser");
+  expect(refused.isError).toBe(true);
+  expect(refused.text).toContain("close_browser");
+  // A refusal for one caller is not one for the next.
+  const other = await connect(
+    "delta",
+    await token(asA, "delta", { sub: "frugal" }),
+    { modern: true },
+  );
+  expect((await other.call("open_browser")).isError).toBe(false);
+
+  await s.call("close_browser", { browser_id: ids[0] });
+  expect((await s.call("open_browser")).isError).toBe(false);
+  await s.client.close();
+  await other.client.close();
+});
+
+test("a 2026-07-28 request needs the tool's scope too", async () => {
+  const browseOnly = await token(asA, "alpha", { scope: "sbm:browse" });
+  const s = await connect("alpha", browseOnly, { modern: true });
+  await expect(s.call("list_secret_refs")).rejects.toThrow();
+  expect((await s.call("open_browser")).isError).toBe(false);
+  await s.client.close();
 });
 
 test("the plaintext never appeared in any HTTP response", () => {

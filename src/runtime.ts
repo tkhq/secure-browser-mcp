@@ -22,7 +22,8 @@ import {
   type BrowserHost,
 } from "./browser/hosts.js";
 import { BrowserSession } from "./browser/session.js";
-import type { ToolContext } from "./tools/tool.js";
+import type { BrowserContext, BrowserScope } from "./browsers.js";
+import type { BrokerContext } from "./tools/tool.js";
 
 // Backend selection: Turnkey when credentials are configured, mock otherwise.
 // SBM_MOCK_CONSENSUS (comma-separated secret names) makes those mock secrets
@@ -147,20 +148,30 @@ export function makeBroker(
   };
 }
 
-/** A fresh context for one agent session: its own browser, redaction
- * registry, and view of the pending fills. */
-export function sessionContext(
+/** The broker side of a connection's tool calls. */
+export function brokerContext(
   broker: Broker,
-  pendingFills: PendingFills,
-): ToolContext {
+  browsers: BrowserScope,
+): BrokerContext {
   return {
     secrets: broker.secrets,
     backend: broker.backend,
-    session: new BrowserSession(broker.browserHost()),
-    registry: new RedactionRegistry(),
-    pendingFills,
+    browsers,
     ...(broker.backend === "turnkey"
       ? { approvalUrl: dashboardActivityUrl }
       : {}),
+  };
+}
+
+/** A fresh browser for one agent session or browser handle: its own
+ * browser, redaction registry, and view of the pending fills. */
+export function browserContext(
+  broker: Broker,
+  pendingFills: PendingFills,
+): BrowserContext {
+  return {
+    session: new BrowserSession(broker.browserHost()),
+    registry: new RedactionRegistry(),
+    pendingFills,
   };
 }
