@@ -59,11 +59,13 @@ Field values are redacted: `[REDACTED:secret-filled-field]` after a fill, `[MASK
 
 ## fill_secret
 
-`{ secret_id: string, element_uid?: string, fields?: [{key, element_uid}] }` → outcome only (no value). Steps performed broker-side: resolve ref → resolve elements → enforce binding (origin, URL pattern, selector) → export from Turnkey → inject via CDP → tag fields for redaction. Throws a binding-violation error if the live page or an element doesn't match the secret's binding; do not retry elsewhere.
+`{ secret_id: string, element_uid?: string, fields?: [{key, element_uid}], intent?: string }` → outcome only (no value). Steps performed broker-side: resolve ref → resolve elements → enforce binding (origin, URL pattern, selector) → export from Turnkey → inject via CDP → tag fields for redaction. Throws a binding-violation error if the live page or an element doesn't match the secret's binding; do not retry elsewhere.
 
 Single-value secrets take `element_uid`. A JSON-payload secret — its binding declares `sbm:fields`, a map from payload key to required selector — takes `fields` instead, filling several inputs in ONE call: one export, one approval. Example: a card secret with keys `number`/`expiry`/`cvc` fills all three checkout fields at once. Such a secret refuses a plain `element_uid` fill, so its whole payload never lands in one field.
 
-When the export needs multi-party approval, returns `{ filled: false, status: "pending_approval", fill_id, activity_id, approval_url? }` instead — see `await_fill`. `approval_url` is the fully qualified Turnkey dashboard link for that activity (absent on the mock backend); relay it to the user verbatim. Calling `fill_secret` again for the same secret and element returns the same `fill_id`.
+`intent` (optional, up to 500 characters) says why the fill is needed, in one or two plain sentences, for the approvers of a consensus-gated export. Example: `"Log in to GitHub to rotate the deploy key, as the user asked"`. Never put a secret value in it.
+
+When the export needs multi-party approval, returns `{ filled: false, status: "pending_approval", fill_id, activity_id, approval_url?, page_url, intent?, approver_note }` instead — see `await_fill`. `approval_url` is the fully qualified Turnkey dashboard link for that activity (absent on the mock backend); relay it to the user verbatim. `approver_note` is review text for the approver: the secret and page the broker checked, the stated intent labeled as unverified, and the approval link. Calling `fill_secret` again for the same secret and element returns the same `fill_id`, and the fill keeps the intent of the first call.
 
 ## await_fill
 

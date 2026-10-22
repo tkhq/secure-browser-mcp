@@ -24,12 +24,35 @@ export function pendingResult(ctx: ToolContext, fill: PendingFill) {
     secret_id: fill.pending.ref.secretId,
     activity_id: activityId,
     ...(approvalUrl ? { approval_url: approvalUrl } : {}),
+    page_url: fill.pageUrl,
+    ...(fill.intent !== undefined ? { intent: fill.intent } : {}),
+    approver_note: approverNote(fill, where),
     message:
-      "Export requires consensus approval. Send the approver this exact " +
-      `link to approve: ${where}. Then call await_fill with this fill_id. ` +
-      "Keep the page where it is: the fill re-validates the destination " +
-      "before injecting.",
+      "Export requires consensus approval. Send the approver the " +
+      "approver_note, which includes this exact link to approve: " +
+      `${where}. Then call await_fill with this fill_id. Keep the page ` +
+      "where it is: the fill re-validates the destination before injecting.",
   };
+}
+
+/**
+ * Review context for the approver, human or automated. The broker states
+ * the facts it checked (secret, page) and keeps the agent's intent apart
+ * from them, labeled as unverified: a prompt-injected agent can state any
+ * intent, but it cannot change the page the binding matched.
+ */
+function approverNote(fill: PendingFill, where: string): string {
+  const ref = fill.pending.ref;
+  const secret = ref.name ? `"${ref.name}"` : ref.secretId;
+  const intent =
+    fill.intent !== undefined
+      ? `Intent stated by the agent (not verified): "${fill.intent}".`
+      : "The agent stated no intent.";
+  return (
+    `Approve the export of secret ${secret} to fill a form on ` +
+    `${fill.pageUrl}. The broker checked that this page matches the ` +
+    `secret's destination binding. ${intent} Approve at: ${where}`
+  );
 }
 
 function specsKey(secretId: string, specs: FillFieldSpec[]): string {
@@ -47,10 +70,23 @@ export const fillSecret = defineTool({
     "conversation. Fails unless the current page matches the secret's " +
     "destination binding. Single-value secrets fill one element_uid; a " +
     "JSON-payload secret (binding declares sbm:fields) fills several fields " +
-    "in one call — one export, one approval.",
+    "in one call — one export, one approval. Pass intent so approvers " +
+    "know why the export is requested.",
   inputSchema: {
     secret_id: z.string().describe("secretId from list_secret_refs"),
     ...targetArgs,
+    intent: z
+      .string()
+      .trim()
+      .min(1)
+      .max(500)
+      .optional()
+      .describe(
+        "Why this fill is needed, in one or two plain sentences, for the " +
+          'approvers who review a consensus-gated export (e.g. "Log in to ' +
+          'GitHub to rotate the deploy key, as the user asked"). Never put ' +
+          "secret values here.",
+      ),
   },
   handler: async (ctx, args) => {
     // 1. Resolve the ref.
@@ -78,6 +114,7 @@ export const fillSecret = defineTool({
     //    after the export would submit a duplicate proposal every retry.
     //    (If the parked activity was meanwhile rejected, await_fill reports
     //    that and clears the entry, and the next fill_secret starts fresh.)
+    //    The parked fill keeps the intent of the call that parked it.
     const requestKey = specsKey(ref.secretId, specs);
     const existing = ctx.pendingFills
       .list()
@@ -98,6 +135,7 @@ export const fillSecret = defineTool({
           pending: err.pending,
           targets: specs,
           pageUrl: validated.pageUrl,
+          ...(args.intent !== undefined ? { intent: args.intent } : {}),
           createdAt: Date.now(),
         };
         await ctx.pendingFills.put(fill);

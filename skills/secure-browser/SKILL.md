@@ -34,7 +34,7 @@ Snapshots and fills target the main frame only. Cross-origin iframe inputs, incl
 2. `navigate` to the page.
 3. `snapshot` — returns interactive elements with `uid`s. Element uids are invalidated by navigation; re-snapshot after every navigation.
 4. Fill non-secret fields (email, name, ZIP) with `type_text`. These are visible in your transcript, which is fine — they are not secrets.
-5. Fill secret fields with `fill_secret`. Single-value secrets take one `element_uid`. A secret whose binding lists `sbm:fields` holds a JSON payload (e.g. a card's number/expiry/cvc): pass `fields: [{key, element_uid}, …]` to fill all of them in one call — one export, one approval.
+5. Fill secret fields with `fill_secret`. Single-value secrets take one `element_uid`. A secret whose binding lists `sbm:fields` holds a JSON payload (e.g. a card's number/expiry/cvc): pass `fields: [{key, element_uid}, …]` to fill all of them in one call — one export, one approval. Pass `intent` with one or two plain sentences on why the fill is needed; approvers use it to decide.
 6. `snapshot` to verify: the filled field's value reads `[REDACTED:secret-filled-field]`.
 7. `click` the submit button, then `snapshot` (repeat with short waits) until the page moves on.
 
@@ -46,7 +46,7 @@ If a browser tool says it needs a `browser_id`, or the page you navigated to is 
 
 Some secrets need multi-party approval to export. `fill_secret` then returns `status: "pending_approval"` with a `fill_id`, a Turnkey `activity_id`, and usually an `approval_url` instead of filling. This is normal, not an error:
 
-1. Tell the user approval is needed and give them the `approval_url` exactly as returned, as a full `https://` link on its own line (it opens the activity in the Turnkey dashboard, where it can also be approved from the Turnkey mobile app). Never shorten it, rewrite it, or replace it with the bare activity id. Only if there is no `approval_url` should you fall back to naming the `activity_id` and the Turnkey dashboard.
+1. Tell the user approval is needed and give them the `approval_url` exactly as returned, as a full `https://` link on its own line (it opens the activity in the Turnkey dashboard, where it can also be approved from the Turnkey mobile app). Never shorten it, rewrite it, or replace it with the bare activity id. Only if there is no `approval_url` should you fall back to naming the `activity_id` and the Turnkey dashboard. Send the `approver_note` with the link, unchanged: it tells the approver which secret, which page, and why.
 2. Leave the page where it is — the fill re-validates the destination before injecting.
 3. Call `await_fill(fill_id)`. If it returns `pending_approval` again, the approval hasn't landed yet; wait and call again. When approved, it completes the fill exactly like `fill_secret` would have.
 
