@@ -56,7 +56,7 @@ Payment links render on `https://buy.stripe.com`; API-created Checkout sessions 
 
 ## Known limits
 
-- Stripe's hosted pages render card inputs in the page's own document (verified on `buy.stripe.com`). Stripe _Elements_ (embedded in a merchant page) uses cross-origin iframes, which the broker's main-frame-only snapshot cannot reach yet.
+- Stripe's hosted pages render card inputs in the page's own document (verified on `buy.stripe.com`). Stripe _Elements_ (embedded in a merchant page) uses cross-origin iframes. The broker fills them with a secret bound to both the merchant origin and `https://js.stripe.com` ([FRAMES.md](FRAMES.md)), but this demo does not exercise that path yet.
 - The payment link must be created card-only (`payment_method_types[0]=card`, which the script does): the multi-method accordion opens visually under synthetic clicks, but its selection state never commits, and Stripe then rejects the submit with "payment method required".
 - Expiry is stored as digits (`1234`); the checkout field formats it to `12 / 34` as it receives input. The fill verifier tolerates fields growing beyond the inserted length for this reason.
 - The Secrets API has no delete yet, so a secret imported with a wrong binding stays; import a corrected one under a new name.

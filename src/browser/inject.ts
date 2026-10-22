@@ -19,7 +19,11 @@ export async function injectSecret(
 ): Promise<void> {
   try {
     const element = session.resolveElement(elementUid);
-    const cdp = session.cdpSession();
+    // The session of the target that holds the element: the tab, or an
+    // out-of-process iframe. The element's backendNodeId means nothing in
+    // any other target, and Input.insertText types into that target's
+    // focused element.
+    const cdp = element.cdp;
 
     // Clear any stale content, then focus via CDP and insert the plaintext.
     // Input.insertText behaves like an IME commit: it fires the native
@@ -28,7 +32,7 @@ export async function injectSecret(
       const input = el as HTMLInputElement;
       if ("value" in el) input.value = "";
     });
-    // Enable the DOM agent on the broker's session so backendNodeId resolves.
+    // Enable the DOM agent on that session so backendNodeId resolves.
     await cdp.send("DOM.getDocument", { depth: 0 });
     await cdp.send("DOM.focus", { backendNodeId: element.backendNodeId });
     await cdp.send("Input.insertText", { text: secret.value });

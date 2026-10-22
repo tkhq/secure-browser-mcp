@@ -26,7 +26,7 @@ Import creates immutable static properties: `sbm:origin` is the exact page origi
 
 ## Supported fields
 
-Snapshots and fills target the main frame only. Cross-origin iframe inputs, including embedded Stripe Elements card fields, are unsupported. Expand hidden form controls and snapshot again; if the inputs live in an iframe, explain the limitation and stop that fill. Do not suggest weakening bindings, importing again, or using another browser to extract the value. Hosted Stripe checkout is the documented test surface; it does not imply support for embedded checkout forms.
+Snapshots include fields in iframes and open shadow roots. A field inside an iframe has a `frame_origin`. It fills only with a secret bound to that frame origin as well as the page origin; a secret without a frame binding fills the top-level page only, and the broker refuses the fill (`frame_binding_required`). If that happens, explain the limitation and stop that fill. Do not suggest weakening bindings or using another browser to extract the value. Expand hidden form controls and snapshot again before concluding a field is missing.
 
 ## Standard flow
 

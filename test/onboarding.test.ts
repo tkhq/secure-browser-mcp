@@ -109,6 +109,22 @@ test("invalid arguments fail without echoing input", () => {
   );
 });
 
+test("a frame origin binds the secret to an iframe of that origin", () => {
+  const framed = [...args, "--frame-origin", "https://js.stripe.com"];
+  expect(parseImport(framed, env).staticProperties).toMatchObject({
+    "sbm:origin": args[3],
+    "sbm:frame-origin": "https://js.stripe.com",
+  });
+  expect(parseImport(args, env).staticProperties).not.toHaveProperty(
+    "sbm:frame-origin",
+  );
+  for (const origin of ["https://js.stripe.com/", "js.stripe.com", ""]) {
+    expect(() => parseImport([...args, "--frame-origin", origin], env)).toThrow(
+      "--frame-origin must be an exact HTTP(S) origin",
+    );
+  }
+});
+
 test("multi-field imports require exact string payload keys", () => {
   const multi = [
     "--name",

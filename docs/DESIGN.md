@@ -22,12 +22,13 @@ Turnkey's export flow fits this exactly. `exportSecret` re-encrypts the secret t
 
 Static properties are bound immutably to a secret at import and are policy-visible. `@turnkey/browser-secrets` parses them and makes the decision; its README lists every key. The main ones:
 
-- `sbm:origin` — exact origin, required for a secret to be fillable
+- `sbm:origin` — exact top-level page origin, required for a secret to be fillable
+- `sbm:frame-origin` — optional exact iframe origin; the secret then fills only into iframes of that origin, on pages of `sbm:origin` (see [FRAMES.md](FRAMES.md))
 - `sbm:url-pattern` — optional URLPattern narrowing within the origin
 - `sbm:selector` — optional CSS selector the target field must match
 - `sbm:fields` — optional JSON map from payload key to selector, for a JSON secret with several parts
 
-`authorize` trusts the observation it is given. The broker reads every fact in it from the browser where page script cannot change it: frame, document, URL and origin from `Page.getFrameTree`, and selector matches and shadow-root mode in an isolated world.
+`authorize` trusts the observation it is given. The broker reads every fact in it from the browser where page script cannot change it: frame, document, URL and origin from `Page.getFrameTree`, in the session of the target that hosts each frame, and selector matches and shadow-root mode in an isolated world. Snapshots and fills reach iframes and open shadow roots; [FRAMES.md](FRAMES.md) gives the rules.
 
 This is the prompt-injection defense. A malicious page can talk the agent into _requesting_ a fill. The fill still fails unless the live page matches the binding chosen by the human at import time.
 

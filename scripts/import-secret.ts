@@ -25,6 +25,7 @@ export function parseImport(args: string[], env: NodeJS.ProcessEnv) {
       options: {
         name: { type: "string" },
         origin: { type: "string" },
+        "frame-origin": { type: "string" },
         "url-pattern": { type: "string" },
         selector: { type: "string" },
         fields: { type: "string" },
@@ -38,17 +39,9 @@ export function parseImport(args: string[], env: NodeJS.ProcessEnv) {
   }
   const { name, origin, selector, fields } = values;
   if (!name?.trim() || !origin) return fail("Provide --name and --origin.");
-  try {
-    const url = new URL(origin);
-    if (!["https:", "http:"].includes(url.protocol) || url.origin !== origin)
-      return fail(
-        "--origin must be an exact HTTP(S) origin without a path or trailing slash.",
-      );
-  } catch {
-    return fail(
-      "--origin must be an exact HTTP(S) origin without a path or trailing slash.",
-    );
-  }
+  exactOrigin(origin, "--origin");
+  const frameOrigin = values["frame-origin"];
+  if (frameOrigin !== undefined) exactOrigin(frameOrigin, "--frame-origin");
   if (Boolean(selector) === Boolean(fields))
     return fail("Provide exactly one of --selector or --fields.");
   if (selector !== undefined && !selector.trim())
@@ -56,6 +49,10 @@ export function parseImport(args: string[], env: NodeJS.ProcessEnv) {
   const staticProperties: Record<string, string> = {
     [BINDING_KEYS.origin]: origin,
   };
+  // An iframe fill needs both origins: the page and the frame inside it.
+  if (frameOrigin !== undefined) {
+    staticProperties[BINDING_KEYS.frameOrigin] = frameOrigin;
+  }
   if (selector) staticProperties[BINDING_KEYS.selector] = selector;
   const pattern = values["url-pattern"];
   if (pattern !== undefined) {
@@ -118,6 +115,18 @@ export function parseImport(args: string[], env: NodeJS.ProcessEnv) {
   return { name, plaintext, staticProperties };
 }
 
+function exactOrigin(value: string, flag: string): void {
+  const message = `${flag} must be an exact HTTP(S) origin without a path or trailing slash.`;
+  try {
+    const url = new URL(value);
+    if (!["https:", "http:"].includes(url.protocol) || url.origin !== value)
+      fail(message);
+  } catch (err) {
+    if (err instanceof InputError) throw err;
+    fail(message);
+  }
+}
+
 type ImportClient = {
   importSecret: (
     input: ReturnType<typeof parseImport> & {
@@ -178,7 +187,7 @@ export async function runImport(
 if (import.meta.main) {
   if (process.argv.slice(2).includes("--help")) {
     console.log(
-      "Usage: bun run scripts/import-secret.ts --name NAME --origin ORIGIN [--url-pattern '/login*'] (--selector CSS | --fields JSON) --value-env ENV_NAME\nRead the value from ENV_NAME, never argv. Requires all three TURNKEY_* credentials and interactive confirmation. Bindings are immutable; verify selectors before import.",
+      "Usage: bun run scripts/import-secret.ts --name NAME --origin ORIGIN [--frame-origin ORIGIN] [--url-pattern '/login*'] (--selector CSS | --fields JSON) --value-env ENV_NAME\nRead the value from ENV_NAME, never argv. Requires all three TURNKEY_* credentials and interactive confirmation. Bindings are immutable; verify selectors before import.\nUse --frame-origin only for a field inside an iframe (for example a payment provider's card frame): the secret then fills only into frames of that origin on pages of --origin, never into the page itself.",
     );
   } else {
     try {

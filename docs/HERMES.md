@@ -75,7 +75,7 @@ The card fill should return `pending_approval`; Hermes should keep the page in p
 
 The local demo proves the connection and fill protocol. For a real backend, you need a Turnkey organization with Secrets enabled and a broker API identity permitted to list and export the intended secrets.
 
-Before importing, navigate to the target page and verify that the broker snapshot includes the intended fields. **Cross-origin iframe fields are unsupported**, including Stripe Elements embedded in merchant pages. The hosted Stripe test-checkout walkthrough is a supported example; embedded card inputs such as those reported on OpenRouter are not. Missing fields can also be hidden behind a tab or accordion: expand it and snapshot again before concluding the page uses an unsupported iframe.
+Before importing, navigate to the target page and verify that the broker snapshot includes the intended fields. A field inside an iframe, such as an embedded Stripe Elements card input, shows a `frame_origin` in the snapshot. Import its secret with `--frame-origin` set to that origin, as well as `--origin` for the page ([FRAMES.md](FRAMES.md)). Embedded provider checkouts are tested on fixture pages only; the hosted Stripe test-checkout walkthrough is the tested live example. Missing fields can also be hidden behind a tab or accordion: expand it and snapshot again.
 
 Bindings are immutable after import, and the current tooling has no secret deletion workflow. Verify the exact origin, pathname pattern, and CSS selector on the live page first. A wrong binding requires a new import, preferably under a distinct name so users can identify the corrected reference.
 
@@ -128,7 +128,7 @@ After updating this checkout, refresh an existing Hermes skill with `bun run ski
 | Symptom                                     | Next step                                                                                                                                                       |
 | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | No secret reference for the target site     | Call `list_secret_refs` and check `backend`. Mock contains fixed demo seeds; switch to Turnkey and use the importer above. The MCP tools cannot import secrets. |
-| Card/password fields absent from `snapshot` | Expand any hidden form controls and snapshot again. Cross-origin iframe fields are unsupported; importing another secret cannot make them reachable.            |
+| Card/password fields absent from `snapshot` | Expand any hidden form controls and snapshot again. Closed shadow roots, and iframes inside shadow roots, are not reachable.                                    |
 | No secure-browser tools                     | Check the active profile's config and YAML indentation, then restart Hermes. Confirm the generated Bun and checkout paths still exist.                          |
 | Skill is missing                            | Install it into the same Hermes home/profile used for chat. The skill and MCP connection are separate setup steps.                                              |
 | No Chromium-based browser found             | Install a supported browser or set `SBM_CHROME_PATH` to its executable on the Hermes host.                                                                      |

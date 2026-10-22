@@ -1,19 +1,24 @@
 /**
  * Builds the `TargetObservation` that @turnkey/browser-secrets `authorize`
  * decides on. `authorize` trusts the observation as given, so every fact
- * here comes from the browser over the broker's own CDP session, where page
- * script cannot change it:
+ * here comes from the browser over the broker's own CDP sessions, where
+ * page script cannot change it:
  *
- *  - frame and document identity, URL and effective origin come from
- *    `Page.getFrameTree` (browser-side state, not page JS);
+ *  - frame and document identity and URL come from `Page.getFrameTree`
+ *    (browser-side state, not page JS), in the session of the target that
+ *    hosts the frame: the tab, or an out-of-process iframe;
+ *  - the effective origin is the frame tree's `securityOrigin`, kept only
+ *    when `window.origin` in an isolated world agrees, and `"null"`
+ *    (opaque) otherwise;
  *  - shadow-root mode and selector matches are evaluated in an isolated
  *    world, so a page that overrides `Element.prototype.matches` or
  *    `getRootNode` in its own world changes nothing here.
  *
- * Snapshots list elements of the top-level document only (`page.$$` on the
- * main frame), so every target's frame ancestry is that one document. An
- * element outside it, or one that is detached, is left out of the
- * observation, and `authorize` refuses it as `target_not_observed`.
+ * A target's frame ancestry runs from the top-level document to the
+ * element's own document, one entry for each frame. An element whose
+ * ancestry cannot be read, whose document is not the one it was
+ * snapshotted in, or that is detached, is left out of the observation, and
+ * `authorize` refuses it as `target_not_observed`.
  */
 import {
   requiredSelectors,
@@ -25,9 +30,13 @@ import {
   type ShadowRootMode,
   type TargetObservation,
 } from "@turnkey/browser-secrets";
-import type { CDPSession } from "puppeteer-core";
+import type { CDPSession, Frame } from "puppeteer-core";
 
-import type { BrowserSession } from "./session.js";
+import {
+  findFrameNode,
+  type BrowserSession,
+  type FrameLocation,
+} from "./session.js";
 
 /** Isolated world the broker reads element facts in. */
 const WORLD_NAME = "sbm-observe";
@@ -60,43 +69,129 @@ export type TopLevelDocument = {
   document: ObservedDocument;
 };
 
+/** A frame's live document, and where the broker reads it. */
+export type FrameDocument = {
+  /** The broker's session for the target that hosts the frame. */
+  cdp: CDPSession;
+  /** The broker's isolated world in the document. */
+  executionContextId: number;
+  document: ObservedDocument;
+};
+
+/** Frame lookups shared by the reads of one snapshot or observation. */
+export type FrameCache = {
+  locations: Map<Frame, Promise<FrameLocation | null>>;
+  documents: Map<Frame, Promise<FrameDocument | null>>;
+};
+
+export function frameCache(): FrameCache {
+  return { locations: new Map(), documents: new Map() };
+}
+
 /**
- * Reads the top-level document's identity from the browser. The frame ID of
- * a tab's main frame is its target ID, so it doubles as the tab identity.
- * The loader ID changes with every new document in the frame, and is the
- * document identity.
+ * Reads the live document of `frame` from the browser. The loader ID
+ * changes with every new document in the frame, and is the document
+ * identity. Returns null for a frame the broker cannot place.
  */
-export async function topLevelDocument(
+export function frameDocument(
   session: BrowserSession,
-): Promise<TopLevelDocument> {
-  await session.ensureStarted();
-  const cdp = session.cdpSession();
+  frame: Frame,
+  cache: FrameCache = frameCache(),
+): Promise<FrameDocument | null> {
+  let found = cache.documents.get(frame);
+  if (!found) {
+    found = readFrameDocument(session, frame, cache).catch(() => null);
+    cache.documents.set(frame, found);
+  }
+  return found;
+}
+
+async function readFrameDocument(
+  session: BrowserSession,
+  frame: Frame,
+  cache: FrameCache,
+): Promise<FrameDocument | null> {
+  const located = await session.locateFrame(frame, cache.locations);
+  if (!located) return null;
+  const { cdp, frameId } = located;
   const { frameTree } = await cdp.send("Page.getFrameTree");
-  const frame = frameTree.frame;
+  const node = findFrameNode(frameTree, frameId)?.frame;
+  if (!node) return null;
+  // Enable the DOM agent on the broker's session so backendNodeIds resolve.
+  await cdp.send("DOM.getDocument", { depth: 0 });
+  const { executionContextId } = await cdp.send("Page.createIsolatedWorld", {
+    frameId,
+    worldName: WORLD_NAME,
+  });
+  const { result } = await cdp.send("Runtime.evaluate", {
+    expression: "window.origin",
+    contextId: executionContextId,
+    returnByValue: true,
+  });
+  // Chrome reports an opaque origin as "null", and an empty one (a frame
+  // with no document yet) is treated the same. A sandboxed frame can report
+  // the origin of its URL in the frame tree while its document's origin is
+  // opaque; any disagreement counts as opaque.
+  const reported = node.securityOrigin || "null";
   return {
-    browserSessionId: session.sessionId(),
-    tabId: frame.id,
+    cdp,
+    executionContextId,
     document: {
-      frameId: frame.id,
-      documentId: frame.loaderId,
-      url: frame.url + (frame.urlFragment ?? ""),
-      // Chrome reports an opaque origin as "null"; an empty one (a frame
-      // with no document yet) is treated the same.
-      origin: frame.securityOrigin || "null",
+      frameId,
+      documentId: node.loaderId,
+      url: node.url + (node.urlFragment ?? ""),
+      origin: result.value === reported ? reported : "null",
     },
   };
 }
 
-/** The redaction identity of a snapshot element in the top-level document. */
+/**
+ * Reads the top-level document's identity from the browser. The frame ID of
+ * a tab's main frame is its target ID, so it doubles as the tab identity.
+ */
+export async function topLevelDocument(
+  session: BrowserSession,
+  cache?: FrameCache,
+): Promise<TopLevelDocument> {
+  const page = await session.ensureStarted();
+  const top = await frameDocument(session, page.mainFrame(), cache);
+  if (!top) throw new Error("The page has no readable document");
+  return {
+    browserSessionId: session.sessionId(),
+    tabId: top.document.frameId,
+    document: top.document,
+  };
+}
+
+/**
+ * The documents from the top-level document down to `frame`'s, or null
+ * when one of them cannot be read.
+ */
+async function frameAncestry(
+  session: BrowserSession,
+  frame: Frame,
+  cache: FrameCache,
+): Promise<FrameDocument[] | null> {
+  const chain: FrameDocument[] = [];
+  for (let f: Frame | null = frame; f; f = f.parentFrame()) {
+    const doc = await frameDocument(session, f, cache);
+    if (!doc) return null;
+    chain.unshift(doc);
+  }
+  return chain;
+}
+
+/** The redaction identity of a snapshot element in `document`. */
 export function redactionTarget(
   top: TopLevelDocument,
+  document: Pick<ObservedDocument, "frameId" | "documentId">,
   elementId: string,
 ): RedactionTarget {
   return {
     browserSessionId: top.browserSessionId,
     tabId: top.tabId,
-    frameId: top.document.frameId,
-    documentId: top.document.documentId,
+    frameId: document.frameId,
+    documentId: document.documentId,
     elementId,
   };
 }
@@ -112,9 +207,8 @@ export async function observeTargets(
   ref: Pick<SecretRef, "staticProperties">,
   request: FillRequest,
 ): Promise<TargetObservation> {
-  const page = await session.ensureStarted();
-  const cdp = session.cdpSession();
-  const top = await topLevelDocument(session);
+  const cache = frameCache();
+  const top = await topLevelDocument(session, cache);
 
   const selectors = new Map<string, Set<string>>();
   for (const target of request.targets) {
@@ -126,13 +220,6 @@ export async function observeTargets(
     if (selector !== undefined) selectors.get(elementId)?.add(selector);
   }
 
-  // Enable the DOM agent on the broker's session so backendNodeIds resolve.
-  await cdp.send("DOM.getDocument", { depth: 0 });
-  const { executionContextId } = await cdp.send("Page.createIsolatedWorld", {
-    frameId: top.document.frameId,
-    worldName: WORLD_NAME,
-  });
-
   const targets: ObservedTarget[] = [];
   for (const [elementId, wanted] of selectors) {
     let element;
@@ -141,12 +228,25 @@ export async function observeTargets(
     } catch {
       continue; // Unknown or stale uid: not observed.
     }
-    if (element.handle.frame !== page.mainFrame()) continue;
+    const frames = await frameAncestry(session, element.handle.frame, cache);
+    if (!frames) continue;
+    const doc = frames[frames.length - 1]!;
+    // The ancestry starts at the top-level document reported below, and
+    // ends at the document the element was snapshotted in, in the session
+    // of the target that holds it.
+    if (
+      frames[0]!.document.documentId !== top.document.documentId ||
+      doc.cdp !== element.cdp ||
+      doc.document.frameId !== element.frameId ||
+      doc.document.documentId !== element.documentId
+    ) {
+      continue;
+    }
     const list = [...wanted];
     const facts = await inspect(
-      cdp,
+      doc.cdp,
       element.backendNodeId,
-      executionContextId,
+      doc.executionContextId,
       list,
     );
     if (!facts) continue;
@@ -159,7 +259,7 @@ export async function observeTargets(
     });
     targets.push({
       elementId,
-      frames: [top.document],
+      frames: frames.map((f) => f.document),
       shadowRoot: facts.shadowRoot,
       selectorMatches,
     });
