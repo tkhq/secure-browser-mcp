@@ -75,7 +75,20 @@ test("fills a secret without ever exposing it", async () => {
     element_uid: password!.uid,
   });
   expect(fill.isError).toBe(false);
-  expect(fill.body).toMatchObject({ filled: true, secret_id: demo!.secretId });
+  expect(fill.body).toEqual({
+    filled: true,
+    confirmed: true,
+    secret_id: demo!.secretId,
+    element_uids: [password!.uid],
+    fields: [
+      {
+        element_uid: password!.uid,
+        length: DEMO_PLAINTEXT.length,
+        matches: true,
+        valid: true,
+      },
+    ],
+  });
 
   // The post-fill snapshot shows the field structurally redacted.
   const snap2 = (await client.callTool("snapshot")).body as {
@@ -236,6 +249,11 @@ test("redacts a card number the page reformats, re-renders and echoes", async ()
     ],
   });
   expect(fill.isError).toBe(false);
+  // The page grouped the number in fours; it still holds the secret.
+  expect(fill.body).toMatchObject({
+    confirmed: true,
+    fields: [{ key: "number", length: 19, matches: true }, {}, {}],
+  });
 
   const snap2 = (await client.callTool("snapshot")).body as {
     elements: { uid: string; name?: string; text?: string; value?: string }[];
@@ -338,6 +356,66 @@ test("a browser_id names a browser of its own, beside the session's", async () =
   const gone = await client.callTool("snapshot", { browser_id });
   expect(gone.isError).toBe(true);
   expect(gone.text).toContain("Unknown browser_id");
+});
+
+test("reports a field the page cleared or rejects after a fill", async () => {
+  const refs = (await client.callTool("list_secret_refs")).body as {
+    refs: { secretId: string; name?: string }[];
+  };
+  const card = refs.refs.find((r) => r.name === "demo-card");
+
+  await client.callTool("navigate", {
+    url: `${FIXTURE_ORIGIN}/checkout-clearing`,
+  });
+  const snap = (await client.callTool("snapshot")).body as {
+    elements: { uid: string; name?: string }[];
+  };
+  const byName = (name: string) =>
+    snap.elements.find((e) => e.name === name)!.uid;
+  const fill = await client.callTool("fill_secret", {
+    secret_id: card!.secretId,
+    fields: [
+      { key: "number", element_uid: byName("cardNumber") },
+      { key: "expiry", element_uid: byName("cardExpiry") },
+      { key: "cvc", element_uid: byName("cardCvc") },
+    ],
+  });
+  expect(fill.isError).toBe(false);
+  expect(fill.body).toEqual({
+    filled: true,
+    confirmed: false,
+    secret_id: card!.secretId,
+    element_uids: [
+      byName("cardNumber"),
+      byName("cardExpiry"),
+      byName("cardCvc"),
+    ],
+    fields: [
+      {
+        element_uid: byName("cardNumber"),
+        key: "number",
+        length: 0,
+        matches: false,
+        valid: true,
+      },
+      {
+        element_uid: byName("cardExpiry"),
+        key: "expiry",
+        length: 4,
+        matches: true,
+        valid: false,
+      },
+      {
+        element_uid: byName("cardCvc"),
+        key: "cvc",
+        length: 3,
+        matches: true,
+        valid: true,
+      },
+    ],
+  });
+  // The facts hold no part of any value.
+  expect(fill.text).not.toMatch(/4242|"1234"|"123"/);
 });
 
 test("the plaintext never appeared anywhere in server output", () => {

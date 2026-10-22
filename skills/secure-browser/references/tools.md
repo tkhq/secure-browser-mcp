@@ -59,7 +59,39 @@ Field values are redacted: `[REDACTED:secret-filled-field]` after a fill, `[MASK
 
 ## fill_secret
 
-`{ secret_id: string, element_uid?: string, fields?: [{key, element_uid}] }` → outcome only (no value). Steps performed broker-side: resolve ref → resolve elements → enforce binding (origin, URL pattern, selector) → export from Turnkey → inject via CDP → tag fields for redaction. Throws a binding-violation error if the live page or an element doesn't match the secret's binding; do not retry elsewhere.
+`{ secret_id: string, element_uid?: string, fields?: [{key, element_uid}] }` → outcome and read-back facts (never the value). Steps performed broker-side: resolve ref → resolve elements → enforce binding (origin, URL pattern, selector) → export from Turnkey → inject via CDP → tag fields for redaction. Throws a binding-violation error if the live page or an element doesn't match the secret's binding; do not retry elsewhere.
+
+On success it returns what each field holds after the write, read back by the broker. These are facts about the field, never its value or any part of it:
+
+```jsonc
+{
+  "filled": true,
+  "confirmed": false, // true when every field holds its value
+  "secret_id": "…",
+  "element_uids": ["e12", "e13"],
+  "fields": [
+    // length: characters in the field now; matches: equals the secret (or its part),
+    // ignoring spaces and punctuation the page adds; valid: the field's
+    // validity.valid, when it has one
+    {
+      "element_uid": "e12",
+      "key": "number",
+      "length": 0,
+      "matches": false,
+      "valid": true,
+    },
+    {
+      "element_uid": "e13",
+      "key": "expiry",
+      "length": 4,
+      "matches": true,
+      "valid": false,
+    },
+  ],
+}
+```
+
+`matches: false` or `length: 0` means the page dropped or changed the value (some masked or script-controlled inputs do). `valid: false` means the page rejects the value's format. Report this to the user; do not submit the form as if the fill worked. A field the page removed during the fill has no `length` and `matches: false`.
 
 Single-value secrets take `element_uid`. A JSON-payload secret — its binding declares `sbm:fields`, a map from payload key to required selector — takes `fields` instead, filling several inputs in ONE call: one export, one approval. Example: a card secret with keys `number`/`expiry`/`cvc` fills all three checkout fields at once. Such a secret refuses a plain `element_uid` fill, so its whole payload never lands in one field.
 
@@ -67,7 +99,7 @@ When the export needs multi-party approval, returns `{ filled: false, status: "p
 
 ## await_fill
 
-`{ fill_id: string, timeout_seconds?: number (default 30, max 120), element_uid?: string, fields?: { key, element_uid }[] }`. Completes a pending fill once approvers reach quorum: waits up to the timeout, re-validates the destination against the live page, injects. Returns `pending_approval` again (same fields, including `approval_url`) if the timeout passes first — the fill stays valid, call again. Fails permanently if the export is rejected. If the target element left the page (or a hosted broker restarted), the fill stays valid: navigate back, snapshot, and call `await_fill` again with the same `fill_id` and the new `element_uid` or `fields`.
+`{ fill_id: string, timeout_seconds?: number (default 30, max 120), element_uid?: string, fields?: { key, element_uid }[] }`. Completes a pending fill once approvers reach quorum: waits up to the timeout, re-validates the destination against the live page, injects, and returns the same result as a completed `fill_secret`. Returns `pending_approval` again (same fields, including `approval_url`) if the timeout passes first — the fill stays valid, call again. Fails permanently if the export is rejected. If the target element left the page (or a hosted broker restarted), the fill stays valid: navigate back, snapshot, and call `await_fill` again with the same `fill_id` and the new `element_uid` or `fields`.
 
 ## list_network_requests (unavailable)
 

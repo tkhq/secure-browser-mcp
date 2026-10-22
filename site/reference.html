@@ -76,8 +76,9 @@
               <code>fields</code>
             </td>
             <td>
-              Checks the binding, requests export, then injects via CDP. May
-              return <code>pending_approval</code>.
+              Checks the binding, requests export, injects via CDP, then reports
+              per field if the page kept the value (never the value). May return
+              <code>pending_approval</code>.
             </td>
           </tr>
           <tr>

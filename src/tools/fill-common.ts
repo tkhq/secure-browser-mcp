@@ -23,7 +23,7 @@ import {
 import { z } from "zod";
 
 import type { ExportedSecret, SecretRef } from "../broker/types.js";
-import { injectSecret } from "../browser/inject.js";
+import { injectSecret, type FieldCheck } from "../browser/inject.js";
 import { observeTargets } from "../browser/observe.js";
 import type { ToolContext } from "./tool.js";
 
@@ -217,12 +217,15 @@ async function recheckTarget(
  *
  * Parts shorter than the registry's minimum length (a 3-digit CVC) are not
  * text-scanned; the registered target still redacts the field itself.
+ *
+ * Returns what each field holds after its write, in `fill.specs` order.
  */
 export async function injectResolved(
   ctx: ToolContext,
   exported: ExportedSecret,
   fill: ValidatedFill,
-): Promise<void> {
+): Promise<FieldCheck[]> {
+  const checks: FieldCheck[] = [];
   try {
     ctx.registry.registerValues(redactionEntries(exported.ref, exported.value));
     let payload: Record<string, unknown> | undefined;
@@ -246,13 +249,39 @@ export async function injectResolved(
       }
       const target = await recheckTarget(ctx, fill, index);
       ctx.registry.registerTarget(target, exported.ref.secretId);
-      await injectSecret(ctx.session, spec.elementUid, {
-        ref: exported.ref,
-        value,
-        release: () => {},
-      });
+      checks.push(
+        await injectSecret(ctx.session, spec.elementUid, {
+          ref: exported.ref,
+          value,
+          release: () => {},
+        }),
+      );
     }
+    return checks;
   } finally {
     exported.release();
   }
+}
+
+/**
+ * The result of a completed fill: the outcome and, for each field, the
+ * non-secret facts read back after the write. `confirmed` is true when
+ * every field holds its value.
+ */
+export function filledResult(
+  secretId: string,
+  specs: FillFieldSpec[],
+  checks: FieldCheck[],
+) {
+  return {
+    filled: true,
+    confirmed: checks.every((c) => c.matches),
+    secret_id: secretId,
+    element_uids: specs.map((s) => s.elementUid),
+    fields: specs.map((s, i) => ({
+      element_uid: s.elementUid,
+      ...(s.key !== undefined ? { key: s.key } : {}),
+      ...checks[i]!,
+    })),
+  };
 }

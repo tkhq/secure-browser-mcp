@@ -35,7 +35,7 @@ Snapshots and fills target the main frame only. Cross-origin iframe inputs, incl
 3. `snapshot` — returns interactive elements with `uid`s. Element uids are invalidated by navigation; re-snapshot after every navigation.
 4. Fill non-secret fields (email, name, ZIP) with `type_text`. These are visible in your transcript, which is fine — they are not secrets.
 5. Fill secret fields with `fill_secret`. Single-value secrets take one `element_uid`. A secret whose binding lists `sbm:fields` holds a JSON payload (e.g. a card's number/expiry/cvc): pass `fields: [{key, element_uid}, …]` to fill all of them in one call — one export, one approval.
-6. `snapshot` to verify: the filled field's value reads `[REDACTED:secret-filled-field]`.
+6. Check the `fill_secret` result: `confirmed: true` means every field holds its value. If a field has `matches: false`, `length: 0`, or `valid: false`, the page dropped or rejected the value; report it and do not submit. A later `snapshot` shows filled fields as `[REDACTED:secret-filled-field]`.
 7. `click` the submit button, then `snapshot` (repeat with short waits) until the page moves on.
 
 ## Browser handles

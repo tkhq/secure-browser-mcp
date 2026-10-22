@@ -16,7 +16,7 @@ Turnkey's export flow fits this exactly. `exportSecret` re-encrypts the secret t
 4. `SecretsClient.exportSecret(ref)` — plaintext lands in broker memory.
 5. Register the value with the `RedactionRegistry` **before** injection.
 6. For each target: observe and authorize again, require the same destination (`isSameDestination`), register the target, then inject over CDP `Input.insertText`. Never through `Runtime.evaluate`.
-7. Drop the value. Return outcome only: `{ filled: true }`.
+7. Read each field back over CDP and compare it to the value in the broker. Drop the value. Return the outcome and non-secret facts per field only: `{ filled: true, confirmed, fields: [{ length, matches, valid }] }`. Never the value or any part of it.
 
 ## Destination binding
 

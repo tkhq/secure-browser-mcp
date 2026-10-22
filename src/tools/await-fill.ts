@@ -4,6 +4,7 @@ import { ConsensusPendingError } from "../broker/secrets-client.js";
 import {
   assertSameDestination,
   FillDeniedError,
+  filledResult,
   injectResolved,
   specsFromArgs,
   targetArgs,
@@ -99,13 +100,9 @@ export const awaitFill = defineTool({
       throw err;
     }
 
-    await injectResolved(ctx, exported, validated);
+    const checks = await injectResolved(ctx, exported, validated);
     await ctx.pendingFills.delete(fill.fillId);
-    return {
-      filled: true,
-      secret_id: ref.secretId,
-      element_uids: fill.targets.map((t) => t.elementUid),
-    };
+    return filledResult(ref.secretId, fill.targets, checks);
   },
 });
 
