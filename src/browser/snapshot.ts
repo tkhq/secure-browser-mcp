@@ -1,6 +1,11 @@
+import type { RedactionRegistry } from "@turnkey/browser-secrets";
 import type { ElementHandle } from "puppeteer-core";
 
-import type { RedactionRegistry } from "../redaction/registry.js";
+import {
+  redactionTarget,
+  topLevelDocument,
+  type TopLevelDocument,
+} from "./observe.js";
 import type { BrowserSession, ResolvedElement } from "./session.js";
 
 /** Agent-visible description of one interactive element. */
@@ -54,8 +59,9 @@ type RawInfo = {
  * Capture the interactive elements of the page and register them with the
  * session so uids resolve back to live nodes. Uids are derived from CDP
  * backendNodeIds, so a field keeps its uid across snapshots of the same
- * document — which is what lets `RedactionRegistry.trackField` tags survive
- * re-snapshotting.
+ * document — which is what lets `RedactionRegistry.registerTarget` tags
+ * survive re-snapshotting. Tags are document-scoped: a new document in the
+ * tab never matches an old tag.
  *
  * Structural redaction happens HERE, not in scrub(): tagged fields, fields
  * that hold a live secret (a re-rendered or mirrored copy), and password
@@ -66,6 +72,7 @@ export async function captureSnapshot(
   registry: RedactionRegistry,
 ): Promise<PageSnapshot> {
   const page = await session.ensureStarted();
+  const top = await topLevelDocument(session);
 
   const handles = await page.$$(INTERACTIVE_SELECTOR);
   const resolved: ResolvedElement[] = [];
@@ -73,7 +80,7 @@ export async function captureSnapshot(
 
   // Values the page shows in the clear, in document order, so a secret the
   // page splits across several fields can be found in their concatenation.
-  const shown: { uid: string; el: SnapshotElement; value: string }[] = [];
+  const shown: Shown[] = [];
 
   for (const handle of handles) {
     const info = await describeElement(handle);
@@ -96,13 +103,13 @@ export async function captureSnapshot(
     if (info.text) el.text = info.text;
     if (info.disabled) el.disabled = true;
     if (info.value !== undefined) {
-      const copied = registry.findSecret(info.value);
-      if (copied !== undefined) {
-        // A field the page re-rendered or mirrored the secret into: tag it
-        // so it stays redacted even after the page edits the copy.
-        registry.trackField(uid, copied);
+      const target = redactionTarget(top, uid);
+      // A field the page re-rendered or mirrored the secret into: tag it
+      // so it stays redacted even after the page edits the copy.
+      for (const copied of registry.findSecretIds(info.value)) {
+        registry.registerTarget(target, copied);
       }
-      if (registry.isTaggedField(uid)) {
+      if (registry.isRegisteredTarget(target)) {
         el.value = REDACTED_FIELD;
       } else if (info.isPassword) {
         // Password values are never echoed, filled or not.
@@ -115,7 +122,7 @@ export async function captureSnapshot(
     elements.push(el);
   }
 
-  tagSplitCopies(registry, shown);
+  tagSplitCopies(registry, top, shown);
   session.setElements(resolved);
   return { url: page.url(), title: await page.title(), elements };
 }
@@ -126,9 +133,12 @@ export async function captureSnapshot(
  * part is too short to match alone, so match the values joined in document
  * order and redact every field a match touches.
  */
+type Shown = { uid: string; el: SnapshotElement; value: string };
+
 function tagSplitCopies(
   registry: RedactionRegistry,
-  shown: { uid: string; el: SnapshotElement; value: string }[],
+  top: TopLevelDocument,
+  shown: Shown[],
 ): void {
   if (shown.length < 2) return;
   let joined = "";
@@ -137,11 +147,13 @@ function tagSplitCopies(
     joined += value + " ";
     return { start, end: start + value.length };
   });
-  for (const span of registry.matches(joined)) {
+  for (const span of registry.findMatches(joined)) {
     shown.forEach(({ uid, el }, k) => {
       const range = ranges[k]!;
       if (range.start >= span.end || range.end <= span.start) return;
-      registry.trackField(uid, span.secretId);
+      for (const id of span.secretIds) {
+        registry.registerTarget(redactionTarget(top, uid), id);
+      }
       el.value = REDACTED_FIELD;
     });
   }

@@ -4,8 +4,9 @@
  */
 import { existsSync } from "node:fs";
 
+import { RedactionRegistry } from "@turnkey/browser-secrets";
+
 import { resolveApiKey, type TenantConfig } from "./auth/tenants.js";
-import { BindingPolicy } from "./broker/binding.js";
 import { MockSecretsClient } from "./broker/mock-secrets.js";
 import type { PendingFills } from "./broker/pending-store.js";
 import type { SecretsClient } from "./broker/secrets-client.js";
@@ -21,7 +22,6 @@ import {
   type BrowserHost,
 } from "./browser/hosts.js";
 import { BrowserSession } from "./browser/session.js";
-import { RedactionRegistry } from "./redaction/registry.js";
 import type { ToolContext } from "./tools/tool.js";
 
 // Backend selection: Turnkey when credentials are configured, mock otherwise.
@@ -91,7 +91,6 @@ export function findChrome(): string {
 export type Broker = {
   secrets: SecretsClient;
   backend: "mock" | "turnkey";
-  binding: BindingPolicy;
   /** Builds one browser host per agent session. */
   browserHost: () => BrowserHost;
   browser: "local" | "browserbase";
@@ -144,7 +143,6 @@ export function makeBroker(
   return {
     secrets: client,
     backend,
-    binding: new BindingPolicy(),
     ...browserHostFromEnv(),
   };
 }
@@ -158,7 +156,6 @@ export function sessionContext(
   return {
     secrets: broker.secrets,
     backend: broker.backend,
-    binding: broker.binding,
     session: new BrowserSession(broker.browserHost()),
     registry: new RedactionRegistry(),
     pendingFills,

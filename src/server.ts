@@ -1,7 +1,6 @@
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import { scrub } from "./redaction/scrub.js";
 import { awaitFill } from "./tools/await-fill.js";
 import { click } from "./tools/click.js";
 import { fillSecret } from "./tools/fill-secret.js";
@@ -55,14 +54,14 @@ export function createServer(ctx: ToolContext): McpServer {
       async (args: Record<string, unknown>) => {
         try {
           // Single choke point: every result — success or error — passes
-          // through scrub() before it reaches the transport. Args were
+          // through registry.scrub() before it reaches the transport. Args were
           // already validated against the tool's zod shape by the SDK.
           const result = await tool.handler(ctx, args as never);
           return {
             content: [
               {
                 type: "text" as const,
-                text: JSON.stringify(scrub(ctx.registry, result), null, 2),
+                text: JSON.stringify(ctx.registry.scrub(result), null, 2),
               },
             ],
           };

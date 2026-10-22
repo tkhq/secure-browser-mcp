@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { Browser, CDPSession, ElementHandle, Page } from "puppeteer-core";
 
 import type { BrowserHost } from "./hosts.js";
@@ -21,8 +23,18 @@ export class BrowserSession {
   private page: Page | undefined;
   private cdp: CDPSession | undefined;
   private elements = new Map<string, ResolvedElement>();
+  private browserSessionId = randomUUID();
 
   constructor(private readonly host: BrowserHost) {}
+
+  /**
+   * Host-owned identity of the running browser, for browser-secrets
+   * observations and redaction targets. Each browser start gets a new one,
+   * so nothing recorded against an earlier browser matches the new one.
+   */
+  sessionId(): string {
+    return this.browserSessionId;
+  }
 
   async ensureStarted(): Promise<Page> {
     if (this.page && !this.page.isClosed()) return this.page;
@@ -31,6 +43,7 @@ export class BrowserSession {
     // session that dropped) before starting fresh.
     await this.host.stop();
     this.browser = await this.host.start();
+    this.browserSessionId = randomUUID();
 
     // A remote browser can end on its own (session timeout, network). Drop
     // the page so the next call starts a fresh session instead of failing.
@@ -65,6 +78,11 @@ export class BrowserSession {
   setElements(elements: ResolvedElement[]): void {
     this.clearElements();
     for (const e of elements) this.elements.set(e.uid, e);
+  }
+
+  /** Whether a snapshot uid is known (it may still be detached). */
+  hasElement(uid: string): boolean {
+    return this.elements.has(uid);
   }
 
   /**

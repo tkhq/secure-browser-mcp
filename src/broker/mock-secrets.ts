@@ -1,3 +1,5 @@
+import { createSecretRef } from "@turnkey/browser-secrets";
+
 import {
   ConsensusNeededError,
   ConsensusPendingError,
@@ -5,7 +7,7 @@ import {
   type SecretsClient,
 } from "./secrets-client.js";
 import type { ExportedSecret, SecretRef } from "./types.js";
-import { BINDING_KEYS, type SecretBinding } from "./types.js";
+import { BINDING_KEYS } from "./types.js";
 
 type MockSecret = {
   name: string;
@@ -21,73 +23,6 @@ type MockOptions = {
   /** Tests only: how long listRefs takes, to hold a call in flight. */
   listDelayMs?: number | undefined;
 };
-
-/**
- * Parse a destination binding from static properties. Returns `{}` when no
- * `sbm:origin` is declared, and `{ bindingError }` when a declared part is
- * malformed. A malformed part never falls back to a looser binding: a bad
- * `sbm:fields` must not turn a card secret into an origin-only one.
- */
-export function parseBinding(
-  staticProperties: Record<string, string>,
-): Pick<SecretRef, "binding" | "bindingError"> {
-  const origin = staticProperties[BINDING_KEYS.origin];
-  if (origin === undefined) return {};
-  const invalid = (reason: string) => ({ bindingError: reason });
-
-  let parsedOrigin: string;
-  try {
-    parsedOrigin = new URL(origin).origin;
-  } catch {
-    return invalid(`${BINDING_KEYS.origin} is not a URL`);
-  }
-  if (parsedOrigin === "null" || parsedOrigin !== origin) {
-    return invalid(
-      `${BINDING_KEYS.origin} must be an origin like https://example.com`,
-    );
-  }
-  const binding: SecretBinding = { origin };
-
-  const urlPattern = staticProperties[BINDING_KEYS.urlPattern];
-  if (urlPattern !== undefined) {
-    try {
-      new URLPattern({ pathname: urlPattern, baseURL: origin });
-    } catch {
-      return invalid(`${BINDING_KEYS.urlPattern} is not a valid URL pattern`);
-    }
-    binding.urlPattern = urlPattern;
-  }
-
-  const selector = staticProperties[BINDING_KEYS.selector];
-  if (selector !== undefined) {
-    if (!selector.trim()) return invalid(`${BINDING_KEYS.selector} is empty`);
-    binding.selector = selector;
-  }
-
-  const fields = staticProperties[BINDING_KEYS.fields];
-  if (fields !== undefined) {
-    let map: unknown;
-    try {
-      map = JSON.parse(fields);
-    } catch {
-      return invalid(`${BINDING_KEYS.fields} is not JSON`);
-    }
-    const entries =
-      map && typeof map === "object" && !Array.isArray(map)
-        ? Object.entries(map)
-        : [];
-    if (
-      entries.length === 0 ||
-      entries.some(([k, v]) => !k || typeof v !== "string" || !v.trim())
-    ) {
-      return invalid(
-        `${BINDING_KEYS.fields} must map payload keys to CSS selectors`,
-      );
-    }
-    binding.fields = Object.fromEntries(entries) as Record<string, string>;
-  }
-  return { binding };
-}
 
 /**
  * In-memory secrets backend for development until Secrets API beta access /
@@ -115,15 +50,13 @@ export class MockSecretsClient implements SecretsClient {
     if (this.listDelayMs > 0) {
       await new Promise((r) => setTimeout(r, this.listDelayMs));
     }
-    return [...this.secrets.entries()].map(([secretId, s]) => {
-      const ref: SecretRef = {
+    return [...this.secrets.entries()].map(([secretId, s]) =>
+      createSecretRef({
         secretId,
         name: s.name,
         staticProperties: s.staticProperties,
-      };
-      Object.assign(ref, parseBinding(s.staticProperties));
-      return ref;
-    });
+      }),
+    );
   }
 
   async exportSecret(ref: SecretRef): Promise<ExportedSecret> {

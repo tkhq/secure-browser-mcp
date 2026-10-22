@@ -1,15 +1,16 @@
 import { expect, test } from "bun:test";
+
+import { RedactionRegistry } from "@turnkey/browser-secrets";
+
 import { parseImport, runImport } from "../scripts/import-secret.js";
 import { listSecretRefs } from "../src/tools/list-secret-refs.js";
 import { MockSecretsClient } from "../src/broker/mock-secrets.js";
-import { BindingPolicy } from "../src/broker/binding.js";
 import {
   MemoryPendingFillStore,
   scopedFills,
 } from "../src/broker/pending-store.js";
 import { LocalChromeHost } from "../src/browser/hosts.js";
 import { BrowserSession } from "../src/browser/session.js";
-import { RedactionRegistry } from "../src/redaction/registry.js";
 
 const secret = "canary-never-print-this";
 const env = {
@@ -144,7 +145,6 @@ for (const backend of ["mock", "turnkey"] as const) {
           new LocalChromeHost({ executablePath: "/unused" }),
         ),
         registry: new RedactionRegistry(),
-        binding: new BindingPolicy(),
         pendingFills: scopedFills(new MemoryPendingFillStore(), {
           owner: "test",
           principal: "test",
