@@ -6,7 +6,7 @@
 
 **Prompt-injection exfiltration.** A malicious page instructs the agent to fill a credential into an attacker-controlled field or site. Defenses, in order:
 
-1. Destination bindings (`sbm:origin`, `sbm:url-pattern`, `sbm:selector`) fixed at import time. The broker refuses non-matching fills.
+1. Destination bindings (`sbm:origin`, `sbm:frame-origin`, `sbm:url-pattern`, `sbm:selector`) fixed at import time. An iframe fill needs both the page origin and the frame origin ([FRAMES.md](FRAMES.md)). The broker refuses non-matching fills.
 2. No `evaluate_script` tool, so the agent cannot plant page JS that reads or intercepts a fill.
 3. Read-back scrubbing: tool results (today, snapshots and error messages) cannot echo a filled value back into the context. This includes copies the page reformats (`4242 4242 4242 4242`), re-renders as a new node, mirrors into other fields and text, splits across several fields, or puts URL-encoded in the page URL. See [Limits of read-back scrubbing](#limits-of-read-back-scrubbing) for the exact matching rules.
 4. (Planned) Human confirmation via MCP Apps / elicitation before sensitive fills.
