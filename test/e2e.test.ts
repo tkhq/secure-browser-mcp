@@ -40,7 +40,6 @@ test("lists the full tool surface, without evaluate_script", async () => {
     "type_text",
     "fill_secret",
     "await_fill",
-    "list_network_requests",
   ]);
 });
 

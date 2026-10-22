@@ -1,8 +1,8 @@
 # Tool reference
 
-Nine working tools and one registered, unavailable stub. All results are redacted server-side before you see them.
+Nine tools. All results are redacted server-side before you see them.
 
-Every browser tool (navigate, snapshot, click, type_text, fill_secret, await_fill, list_network_requests) also takes an optional `browser_id` from `open_browser`. With it, the tool acts in that browser. Without it, the tool uses the connection's own browser. A connection with no browser of its own (an MCP 2026-07-28 client) must pass `browser_id`.
+Every browser tool (navigate, snapshot, click, type_text, fill_secret, await_fill) also takes an optional `browser_id` from `open_browser`. With it, the tool acts in that browser. Without it, the tool uses the connection's own browser. A connection with no browser of its own (an MCP 2026-07-28 client) must pass `browser_id`.
 
 ## open_browser
 
@@ -104,7 +104,3 @@ When the export needs multi-party approval, returns `{ filled: false, status: "p
 ## await_fill
 
 `{ fill_id: string, timeout_seconds?: number (default 30, max 120), element_uid?: string, fields?: { key, element_uid }[] }`. Completes a pending fill once approvers reach quorum: waits up to the timeout, re-validates the destination against the live page, injects, and returns the same result as a completed `fill_secret`. Returns `pending_approval` again (same fields, including `approval_url`) if the timeout passes first — the fill stays valid, call again. Fails permanently if the export is rejected. If the target element left the page (or a hosted broker restarted), the fill stays valid: navigate back, snapshot, and call `await_fill` again with the same `fill_id` and the new `element_uid` or `fields`.
-
-## list_network_requests (unavailable)
-
-Registered scaffold only: returns `not_implemented`. Do not plan workflows around this tool.

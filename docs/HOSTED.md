@@ -139,11 +139,11 @@ The broker caches each JWKS for 10 minutes and refetches it, at most every 30 se
 
 **Scopes.** Each tool needs one scope:
 
-| Scope        | Tools                                                                                                  |
-| ------------ | ------------------------------------------------------------------------------------------------------ |
-| `sbm:browse` | `open_browser`, `close_browser`, `navigate`, `snapshot`, `click`, `type_text`, `list_network_requests` |
-| `sbm:fill`   | `fill_secret`, `await_fill`                                                                            |
-| `sbm:refs`   | `list_secret_refs`                                                                                     |
+| Scope        | Tools                                                                         |
+| ------------ | ----------------------------------------------------------------------------- |
+| `sbm:browse` | `open_browser`, `close_browser`, `navigate`, `snapshot`, `click`, `type_text` |
+| `sbm:fill`   | `fill_secret`, `await_fill`                                                   |
+| `sbm:refs`   | `list_secret_refs`                                                            |
 
 The scopes apply the same way to both protocol versions. Opening a session needs at least one of these scopes; without one, the broker answers `403 insufficient_scope` with `scope="sbm:browse"`. Listing tools needs nothing more. An agent that fills secrets needs all three. The broker checks scopes on every request against that request's token, so a client that steps up its token gets the new scopes in the same session.
 
@@ -211,7 +211,7 @@ The broker picks the era for each request with the MCP TypeScript SDK's own clas
 
 ## Browser handles
 
-A browser handle is a browser that does not belong to one connection. `open_browser` returns a `browser_id`. Every browser tool (`navigate`, `snapshot`, `click`, `type_text`, `fill_secret`, `await_fill`, `list_network_requests`) takes an optional `browser_id` and then acts in that browser. `close_browser` with the `browser_id` closes it.
+A browser handle is a browser that does not belong to one connection. `open_browser` returns a `browser_id`. Every browser tool (`navigate`, `snapshot`, `click`, `type_text`, `fill_secret`, `await_fill`) takes an optional `browser_id` and then acts in that browser. `close_browser` with the `browser_id` closes it.
 
 - Use handles with a 2026-07-28 client: it has no session, so a browser tool without a `browser_id` fails. Use them also with a 2025 client that opens a new session for each tool call (the Arcade gateway). A browser tied to such a session is gone before the next call.
 - On a 2025 session, a call without `browser_id` uses the session's own browser, as before. The session's browser and its handles are separate browsers.

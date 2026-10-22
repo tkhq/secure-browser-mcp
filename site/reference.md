@@ -8,16 +8,15 @@ html: https://tkhq.github.io/secure-browser-mcp/reference.html
 
 The tool surface is intentionally small. All results pass through the server's redaction layer.
 
-| Operation               | Input                                         | Result / behavior                                                                                |
-| ----------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `list_secret_refs`      | None                                          | Opaque IDs, names, and destination bindings. Never returns secret values.                        |
-| `navigate`              | `url`                                         | Navigates the broker-owned browser and returns its final URL and title.                          |
-| `snapshot`              | None                                          | Returns interactive element IDs, headings, and alert text. Filled values are redacted.           |
-| `click`                 | `element_uid`                                 | Clicks an element from the most recent snapshot.                                                 |
-| `type_text`             | `element_uid`, `text`                         | Types visible, non-secret text. Never use it for a credential.                                   |
-| `fill_secret`           | `secret_id` plus `element_uid`, or `fields`   | Injects via CDP if the binding holds; says if each field kept it. May return `pending_approval`. |
-| `await_fill`            | `fill_id`, optional `timeout_seconds` (1–120) | Waits for approval, revalidates the target, and completes a pending fill; it can remain pending. |
-| `list_network_requests` | None                                          | Reserved scaffold; currently returns `not_implemented`.                                          |
+| Operation          | Input                                         | Result / behavior                                                                                |
+| ------------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `list_secret_refs` | None                                          | Opaque IDs, names, and destination bindings. Never returns secret values.                        |
+| `navigate`         | `url`                                         | Navigates the broker-owned browser and returns its final URL and title.                          |
+| `snapshot`         | None                                          | Returns interactive element IDs, headings, and alert text. Filled values are redacted.           |
+| `click`            | `element_uid`                                 | Clicks an element from the most recent snapshot.                                                 |
+| `type_text`        | `element_uid`, `text`                         | Types visible, non-secret text. Never use it for a credential.                                   |
+| `fill_secret`      | `secret_id` plus `element_uid`, or `fields`   | Injects via CDP if the binding holds; says if each field kept it. May return `pending_approval`. |
+| `await_fill`       | `fill_id`, optional `timeout_seconds` (1–120) | Waits for approval, revalidates the target, and completes a pending fill; it can remain pending. |
 
 ## Fill shapes
 
