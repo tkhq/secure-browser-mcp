@@ -10,6 +10,8 @@ import { McpStdioClient } from "./mcp-client.js";
  */
 
 const DEMO_PLAINTEXT = "mock-demo-p@ssw0rd-1234"; // mock-secrets.ts seed
+/** The fixture server on another site, for a cross-site navigation. */
+const OTHER_SITE = FIXTURE_ORIGIN.replace("localhost", "127.0.0.1");
 
 let fixture: { stop: () => void };
 let client: McpStdioClient;
@@ -159,6 +161,56 @@ test("fills a JSON card secret into several fields with one call", async () => {
     expect(field?.value).toBe("[REDACTED:secret-filled-field]");
   }
   expect(client.transcript).not.toContain("4242424242424242");
+});
+
+test("a new document does not inherit the old document's redaction tags", async () => {
+  const refs = (await client.callTool("list_secret_refs")).body as {
+    refs: { secretId: string; name?: string }[];
+  };
+  const card = refs.refs.find((r) => r.name === "demo-card");
+  type Snap = { elements: { uid: string; name?: string; value?: string }[] };
+  const cardFields = ["cardNumber", "cardExpiry", "cardCvc"];
+  const checkout = async (origin: string) => {
+    await client.callTool("navigate", { url: `${origin}/checkout` });
+    return (await client.callTool("snapshot")).body as Snap;
+  };
+  const uids = (snap: Snap) =>
+    cardFields.map((name) => snap.elements.find((e) => e.name === name)!.uid);
+  const fillCard = (snap: Snap) => {
+    const [number, expiry, cvc] = uids(snap);
+    return client.callTool("fill_secret", {
+      secret_id: card!.secretId,
+      fields: [
+        { key: "number", element_uid: number },
+        { key: "expiry", element_uid: expiry },
+        { key: "cvc", element_uid: cvc },
+      ],
+    });
+  };
+  const values = (snap: Snap) =>
+    cardFields.map((name) => snap.elements.find((e) => e.name === name)?.value);
+  const redacted = cardFields.map(() => "[REDACTED:secret-filled-field]");
+
+  // A cross-site load gets a new renderer process, and a new process
+  // numbers its nodes from the start again. So the fixture form gets the
+  // same uids each time it loads after a cross-site hop.
+  await checkout(OTHER_SITE);
+  const first = await checkout(FIXTURE_ORIGIN);
+  expect((await fillCard(first)).isError).toBe(false);
+  expect(values((await client.callTool("snapshot")).body as Snap)).toEqual(
+    redacted,
+  );
+
+  await checkout(OTHER_SITE);
+  const second = await checkout(FIXTURE_ORIGIN);
+  expect(uids(second)).toEqual(uids(first));
+  expect(values(second)).toEqual(["", "", ""]);
+
+  // A new fill tags the fields again.
+  expect((await fillCard(second)).isError).toBe(false);
+  expect(values((await client.callTool("snapshot")).body as Snap)).toEqual(
+    redacted,
+  );
 });
 
 test("redacts a card number the page reformats, re-renders and echoes", async () => {
