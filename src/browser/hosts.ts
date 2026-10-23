@@ -14,12 +14,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import puppeteer, { type Browser } from "puppeteer-core";
+import puppeteer, { type Browser, type Page } from "puppeteer-core";
 
 export interface BrowserHost {
-  readonly kind: "local" | "browserbase";
+  readonly kind: "local" | "browserbase" | "lightpanda";
   /** Start a fresh browser for one agent session. */
   start(): Promise<Browser>;
+  /** Optional host-specific fresh page creation and compatibility gate. */
+  openPage?(browser: Browser): Promise<Page>;
   /** Tear the browser down; safe to call when nothing is running. */
   stop(): Promise<void>;
 }
