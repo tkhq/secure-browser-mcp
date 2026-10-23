@@ -1,3 +1,4 @@
+import { assertActive } from "../tools/tool.js";
 import type { ExportedSecret } from "../broker/types.js";
 import type { BrowserSession } from "./session.js";
 
@@ -16,8 +17,10 @@ export async function injectSecret(
   session: BrowserSession,
   elementUid: string,
   secret: ExportedSecret,
+  signal?: AbortSignal,
 ): Promise<void> {
   try {
+    assertActive(signal);
     const element = session.resolveElement(elementUid);
     const cdp = session.cdpSession();
 
@@ -31,6 +34,7 @@ export async function injectSecret(
     // Enable the DOM agent on the broker's session so backendNodeId resolves.
     await cdp.send("DOM.getDocument", { depth: 0 });
     await cdp.send("DOM.focus", { backendNodeId: element.backendNodeId });
+    assertActive(signal);
     await cdp.send("Input.insertText", { text: secret.value });
 
     // Verify acceptance by length only — never echo the value. The field may

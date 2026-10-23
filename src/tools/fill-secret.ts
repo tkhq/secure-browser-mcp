@@ -10,7 +10,12 @@ import {
   validateTargets,
   type FillFieldSpec,
 } from "./fill-common.js";
-import { defineTool, type PendingFill, type ToolContext } from "./tool.js";
+import {
+  assertActive,
+  defineTool,
+  type PendingFill,
+  type ToolContext,
+} from "./tool.js";
 
 export function pendingResult(ctx: ToolContext, fill: PendingFill) {
   const activityId = fill.pending.activityId;
@@ -66,12 +71,8 @@ export const fillSecret = defineTool({
     //    the binding baked into the secret's static properties at import.
     const validated = await validateTargets(ctx, ref, specs);
 
-    // 4. TODO: human confirmation (elicitation / MCP App) — later milestone.
-    //    A cancel frees this request's id while the handler still runs, so
-    //    check the request's `signal.aborted` (from the SDK's handler
-    //    context, which server.ts does not pass to tools yet) before each
-    //    elicitation or related notification. Otherwise it can reach a new
-    //    request that reuses the id (src/inflight.ts).
+    // 4. Human confirmation (elicitation / MCP App) remains a later milestone.
+    // The SDK cancellation signal is checked before export and every write.
 
     // 5. Idempotency, BEFORE any export attempt: re-requesting a fill that
     //    is already parked on approval returns the same handle. Checking
@@ -90,6 +91,7 @@ export const fillSecret = defineTool({
     //    and await_fill completes the fill once approvers reach quorum.
     let exported;
     try {
+      assertActive(ctx.signal);
       exported = await ctx.secrets.exportSecret(ref);
     } catch (err) {
       if (err instanceof ConsensusNeededError && err.pending) {

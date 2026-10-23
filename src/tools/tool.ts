@@ -23,7 +23,12 @@ export type BrokerContext = {
  * names, or the connection's own (src/browsers.ts). `secrets` is shared by
  * every browser of the broker.
  */
-export type ToolContext = BrokerContext & BrowserContext;
+export type ToolContext = BrokerContext &
+  BrowserContext & { signal?: AbortSignal };
+
+export function assertActive(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error("Request cancelled");
+}
 
 /**
  * Tool results are plain JSON values. `server.ts` owns serialization: every

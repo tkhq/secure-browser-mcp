@@ -54,9 +54,18 @@ export class BrowserSession {
       this.browser = undefined;
     });
 
-    const pages = await this.browser.pages();
-    this.page = pages[0] ?? (await this.browser.newPage());
-    this.cdp = await this.page.createCDPSession();
+    try {
+      if (this.host.openPage)
+        this.page = await this.host.openPage(this.browser);
+      else {
+        const pages = await this.browser.pages();
+        this.page = pages[0] ?? (await this.browser.newPage());
+      }
+      this.cdp = await this.page.createCDPSession();
+    } catch (error) {
+      await this.close();
+      throw error;
+    }
     // Element uids are backendNodeId-based and die with the document.
     this.page.on("framenavigated", (frame) => {
       if (frame === this.page?.mainFrame()) this.clearElements();
@@ -108,6 +117,11 @@ export class BrowserSession {
   clearElements(): void {
     for (const e of this.elements.values()) void e.handle.dispose();
     this.elements.clear();
+  }
+
+  /** Cancellation consumes a one-shot worker, including an in-flight start. */
+  async cancelRequest(): Promise<void> {
+    if (this.host.kind === "lightpanda") await this.close();
   }
 
   async close(): Promise<void> {

@@ -47,7 +47,10 @@ export function createServer(ctx: BrokerContext): McpServer {
   const registerTool = server.registerTool.bind(server) as (
     name: string,
     config: { description: string; inputSchema: z.ZodObject },
-    cb: (args: Record<string, unknown>) => Promise<CallToolResult>,
+    cb: (
+      args: Record<string, unknown>,
+      request: { mcpReq: { signal: AbortSignal } },
+    ) => Promise<CallToolResult>,
   ) => void;
 
   for (const tool of TOOLS) {
@@ -64,7 +67,10 @@ export function createServer(ctx: BrokerContext): McpServer {
             : tool.inputSchema,
         ),
       },
-      async (input: Record<string, unknown>) => {
+      async (
+        input: Record<string, unknown>,
+        request: { mcpReq: { signal: AbortSignal } },
+      ) => {
         const { browser_id, ...rest } = input;
         const args = tool.browser ? rest : input;
         // Errors are scrubbed with the registry of the browser the call
@@ -80,11 +86,27 @@ export function createServer(ctx: BrokerContext): McpServer {
             tool.browser,
             async (browser) => {
               registry = browser.registry;
-              const out = await tool.handler(
-                { ...ctx, ...browser },
-                args as never,
-              );
-              return browser.registry.scrub(out);
+              const cancel = () => {
+                void browser.session.cancelRequest().catch(() => {});
+              };
+              request.mcpReq.signal.addEventListener("abort", cancel, {
+                once: true,
+              });
+              try {
+                if (request.mcpReq.signal.aborted) {
+                  cancel();
+                  throw new Error("Request cancelled");
+                }
+                const out = await tool.handler(
+                  { ...ctx, ...browser, signal: request.mcpReq.signal },
+                  args as never,
+                );
+                if (request.mcpReq.signal.aborted)
+                  throw new Error("Request cancelled");
+                return browser.registry.scrub(out);
+              } finally {
+                request.mcpReq.signal.removeEventListener("abort", cancel);
+              }
             },
           );
           return {

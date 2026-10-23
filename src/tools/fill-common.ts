@@ -25,7 +25,7 @@ import { z } from "zod";
 import type { ExportedSecret, SecretRef } from "../broker/types.js";
 import { injectSecret } from "../browser/inject.js";
 import { observeTargets } from "../browser/observe.js";
-import type { ToolContext } from "./tool.js";
+import { assertActive, type ToolContext } from "./tool.js";
 
 /** One requested destination: an element, plus the payload key for JSON
  * multi-field secrets (absent for plain single-value fills). */
@@ -224,6 +224,7 @@ export async function injectResolved(
   fill: ValidatedFill,
 ): Promise<void> {
   try {
+    assertActive(ctx.signal);
     ctx.registry.registerValues(redactionEntries(exported.ref, exported.value));
     let payload: Record<string, unknown> | undefined;
     if (fill.specs.some((s) => s.key !== undefined)) {
@@ -246,11 +247,16 @@ export async function injectResolved(
       }
       const target = await recheckTarget(ctx, fill, index);
       ctx.registry.registerTarget(target, exported.ref.secretId);
-      await injectSecret(ctx.session, spec.elementUid, {
-        ref: exported.ref,
-        value,
-        release: () => {},
-      });
+      await injectSecret(
+        ctx.session,
+        spec.elementUid,
+        {
+          ref: exported.ref,
+          value,
+          release: () => {},
+        },
+        ctx.signal,
+      );
     }
   } finally {
     exported.release();

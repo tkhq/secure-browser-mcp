@@ -97,3 +97,10 @@ For a real-world walkthrough — an agent paying a Stripe test checkout with a c
 | `docs/`           | Design, threat model, hosted broker, Stripe demo walkthrough                          |
 
 Destination-binding checks and the redaction layer that every tool result passes through come from [`@turnkey/browser-secrets`](https://www.npmjs.com/package/@turnkey/browser-secrets).
+
+## Experimental isolated Lightpanda
+
+See [the isolated worker design and offline test](docs/LIGHTPANDA.md). It uses
+one externally provisioned worker per broker, a private Unix socket, and separate
+network namespaces. The default example has no network access and uses synthetic
+secrets only.

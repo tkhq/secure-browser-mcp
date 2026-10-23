@@ -21,6 +21,7 @@ import {
   LocalChromeHost,
   type BrowserHost,
 } from "./browser/hosts.js";
+import { LightpandaHost } from "./browser/lightpanda.js";
 import { BrowserSession } from "./browser/session.js";
 import type { BrowserContext, BrowserScope } from "./browsers.js";
 import type { BrokerContext } from "./tools/tool.js";
@@ -94,7 +95,7 @@ export type Broker = {
   backend: "mock" | "turnkey";
   /** Builds one browser host per agent session. */
   browserHost: () => BrowserHost;
-  browser: "local" | "browserbase";
+  browser: "local" | "browserbase" | "lightpanda";
 };
 
 /**
@@ -104,6 +105,24 @@ export type Broker = {
  */
 function browserHostFromEnv(): Pick<Broker, "browserHost" | "browser"> {
   const kind = process.env["SBM_BROWSER"] ?? "local";
+  if (kind === "lightpanda") {
+    const socket = process.env["SBM_LIGHTPANDA_SOCKET"];
+    if (!socket)
+      throw new Error("Lightpanda requires a dedicated SBM_LIGHTPANDA_SOCKET");
+    // One worker per broker instance; hosted multi-session pooling is unsupported.
+    let allocated = false;
+    return {
+      browser: "lightpanda",
+      browserHost: () => {
+        if (allocated)
+          throw new Error(
+            "Provision a new isolated Lightpanda worker and broker",
+          );
+        allocated = true;
+        return new LightpandaHost(socket);
+      },
+    };
+  }
   if (kind === "browserbase") {
     const apiKey = process.env["BROWSERBASE_API_KEY"];
     if (!apiKey)
@@ -122,7 +141,7 @@ function browserHostFromEnv(): Pick<Broker, "browserHost" | "browser"> {
   }
   if (kind !== "local") {
     throw new Error(
-      `SBM_BROWSER must be "local" or "browserbase", not "${kind}"`,
+      `SBM_BROWSER must be "local", "lightpanda" or "browserbase", not "${kind}"`,
     );
   }
   const executablePath = findChrome();
