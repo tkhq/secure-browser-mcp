@@ -74,9 +74,9 @@ On success it returns what each field holds after the write, read back by the br
   "secret_id": "…",
   "element_uids": ["e12", "e13"],
   "fields": [
-    // length: characters in the field now; matches: equals the secret (or its part),
-    // ignoring spaces and punctuation the page adds; valid: the field's
-    // validity.valid, when it has one
+    // length: characters in the field now; matches: equals the secret (or its part)
+    // exactly, except that a number the page groups ("4242 4242 …") still matches;
+    // valid: the field's validity.valid, when it has one
     {
       "element_uid": "e12",
       "key": "number",

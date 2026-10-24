@@ -9,10 +9,9 @@ import type { BrowserSession } from "./session.js";
  */
 export type FieldCheck = {
   /** Length of the field's current value; absent when the field could not
-   * be read back (the page removed it). */
+   * be read back (the page removed it from the document). */
   length?: number;
-  /** Whether the current value equals the secret, ignoring spaces and
-   * punctuation the page may add (a card number grouped in fours). */
+  /** Whether the current value equals the secret (see `valueMatches`). */
   matches: boolean;
   /** The field's `validity.valid`, for elements that have one. */
   valid?: boolean;
@@ -63,15 +62,40 @@ export async function injectSecret(
   }
 }
 
-/** Letters and digits only, so formatting the page adds does not count. */
-const significant = (s: string) =>
-  s.normalize("NFKC").replace(/[^\p{L}\p{N}]/gu, "");
+/** A number the page may group, such as a card number: digits, with
+ * spaces or hyphens only. */
+const GROUPED_NUMBER = /^[\d -]+$/;
+/** The separators a page may add when it groups such a number. */
+const NUMBER_FORMAT = /^[\d -/.]+$/;
+const digits = (s: string) => s.replace(/\D/g, "");
 
-/** Runs with `this` bound to the field. Returns its value and validity. */
+/**
+ * Whether a field's value is the secret. The comparison is exact, with one
+ * exception: a number the page grouped ("4242 4242 4242 4242") matches when
+ * it has the same digits and only spaces, hyphens, slashes or dots were
+ * added. That exception never applies to a password field, and never to a
+ * secret that has any character other than a digit, space or hyphen, so a
+ * page that removes characters from a password does not match.
+ */
+export function valueMatches(
+  secret: string,
+  value: string,
+  isPassword: boolean,
+): boolean {
+  if (value === secret) return true;
+  if (isPassword || !GROUPED_NUMBER.test(secret)) return false;
+  const want = digits(secret);
+  return want.length > 0 && NUMBER_FORMAT.test(value) && digits(value) === want;
+}
+
+/** Runs with `this` bound to the field. Returns its value and validity, or
+ * null when the field is no longer in the document. */
 const READ_FIELD = `function () {
+  if (!this.isConnected) return null;
   const value = typeof this.value === "string" ? this.value : (this.textContent ?? "");
   const valid = this.validity && typeof this.validity.valid === "boolean" ? this.validity.valid : null;
-  return { value, valid };
+  const isPassword = this.localName === "input" && this.type === "password";
+  return { value, valid, isPassword };
 }`;
 
 /**
@@ -81,7 +105,9 @@ const READ_FIELD = `function () {
  * handle, so it still works when the change event made the page navigate
  * within the document (which disposes the handles). The facts are only as
  * true as the page lets them be, since page script can change what a field
- * reports. A field that cannot be read back reports no length and no match.
+ * reports. A field that cannot be read back, or that the page removed from
+ * the document, reports no length and no match: a removed node can keep
+ * its old value, but the page no longer submits it.
  */
 async function checkField(
   cdp: CDPSession,
@@ -89,7 +115,10 @@ async function checkField(
   secret: string,
 ): Promise<FieldCheck> {
   let objectId: string | undefined;
-  let field: { value: string; valid: boolean | null } | undefined;
+  let field:
+    | { value: string; valid: boolean | null; isPassword: boolean }
+    | null
+    | undefined;
   try {
     ({
       object: { objectId },
@@ -110,12 +139,9 @@ async function checkField(
     }
   }
   if (typeof field?.value !== "string") return { matches: false };
-  const loose = significant(secret);
   const check: FieldCheck = {
     length: field.value.length,
-    matches:
-      field.value === secret ||
-      (loose.length > 0 && significant(field.value) === loose),
+    matches: valueMatches(secret, field.value, field.isPassword),
   };
   if (typeof field.valid === "boolean") check.valid = field.valid;
   return check;

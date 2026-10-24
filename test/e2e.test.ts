@@ -389,7 +389,7 @@ test("a browser_id names a browser of its own, beside the session's", async () =
   expect(gone.text).toContain("Unknown browser_id");
 });
 
-test("reports a field the page cleared or rejects after a fill", async () => {
+test("reports a field the page cleared, rejects or removed after a fill", async () => {
   const refs = (await client.callTool("list_secret_refs")).body as {
     refs: { secretId: string; name?: string }[];
   };
@@ -436,13 +436,9 @@ test("reports a field the page cleared or rejects after a fill", async () => {
         matches: true,
         valid: false,
       },
-      {
-        element_uid: byName("cardCvc"),
-        key: "cvc",
-        length: 3,
-        matches: true,
-        valid: true,
-      },
+      // The page removed the field. Its detached node still holds the
+      // value, but that is not a confirmation.
+      { element_uid: byName("cardCvc"), key: "cvc", matches: false },
     ],
   });
   // The facts hold no part of any value.

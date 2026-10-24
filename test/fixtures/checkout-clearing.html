@@ -7,8 +7,9 @@
   <body>
     <!--
       A broken payment form: the card number input clears itself on every
-      input event, and the expiry field wants MM/YY, so a plain MMYY value
-      is invalid. A fill must report both instead of a bare success.
+      input event, the expiry field wants MM/YY, so a plain MMYY value is
+      invalid, and the CVC field removes itself on change. A fill must
+      report all three instead of a bare success.
     -->
     <form id="checkout" action="/pay" method="post">
       <label for="cardNumber">Card number</label>
@@ -29,6 +30,8 @@
       number.addEventListener("input", () => {
         number.value = "";
       });
+      const cvc = document.getElementById("cardCvc");
+      cvc.addEventListener("change", () => cvc.remove());
     </script>
   </body>
 </html>

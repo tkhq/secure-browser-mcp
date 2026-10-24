@@ -7,7 +7,7 @@
   <body>
     <!--
       Behaves like real payment forms: it groups the card number in fours,
-      re-renders the input as a new node on change, and echoes the number
+      re-renders the input as a new node on blur, and echoes the number
       into a read-only summary field, the pay button and a status line.
     -->
     <form id="checkout" action="/pay" method="post">
@@ -32,7 +32,7 @@
         input.addEventListener("input", () => {
           input.value = group(input.value);
         });
-        input.addEventListener("change", () => {
+        input.addEventListener("blur", () => {
           const fresh = input.cloneNode();
           fresh.value = input.value;
           input.replaceWith(fresh);
