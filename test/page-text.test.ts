@@ -4,7 +4,8 @@ import { RedactionRegistry } from "@turnkey/browser-secrets";
 import type { Page } from "puppeteer-core";
 
 import { LocalChromeHost } from "../src/browser/hosts.js";
-import { capturePageText } from "../src/browser/page-text.js";
+import { capturePageText, MAX_SCANNED_TEXT } from "../src/browser/page-text.js";
+import { captureSnapshot } from "../src/browser/snapshot.js";
 import { BrowserSession } from "../src/browser/session.js";
 import { findChrome } from "../src/runtime.js";
 
@@ -63,4 +64,35 @@ test("scrubs a secret before the cut, so no part of it is left", async () => {
   expect(status).toHaveLength(200);
   expect(status).not.toContain("4242");
   expect(status!.slice(196)).toBe("[RE…");
+});
+
+test("scrubs a secret longer than the cut whole", async () => {
+  const registry = new RedactionRegistry();
+  const secret = `synthetic-${"s3cr3t".repeat(160)}`;
+  registry.registerValue(secret, "long");
+  await page.setContent(`<h1>${secret}</h1>`);
+  const [heading] = (await capturePageText(page, registry)).headings;
+  expect(heading).toBe("[REDACTED:long]");
+});
+
+test("leaves out an entry too long to scan", async () => {
+  await page.setContent(
+    `<h1>Short</h1><h2>${"x".repeat(MAX_SCANNED_TEXT + 1)}</h2>`,
+  );
+  const { headings } = await capturePageText(page, new RedactionRegistry());
+  expect(headings).toEqual(["Short"]);
+});
+
+test("scrubs an element's text before the cut", async () => {
+  const registry = new RedactionRegistry();
+  registry.registerValue("4242424242424242", "card");
+  // The number starts just before the 120-character cut.
+  await page.setContent(
+    `<button>${"x".repeat(110)} 4242 4242 4242 4242</button>`,
+  );
+  const snap = await captureSnapshot(session, registry);
+  const button = snap.elements.find((e) => e.tag === "button")!;
+  expect(button.text).toHaveLength(120);
+  expect(button.text).not.toContain("4242");
+  expect(button.text!.slice(111)).toBe("[REDACTE…");
 });

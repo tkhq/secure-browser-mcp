@@ -6,7 +6,12 @@ import {
   topLevelDocument,
   type TopLevelDocument,
 } from "./observe.js";
-import { capturePageText, type PageText } from "./page-text.js";
+import {
+  capturePageText,
+  MAX_SCANNED_TEXT,
+  scrubThenCut,
+  type PageText,
+} from "./page-text.js";
 import type { BrowserSession, ResolvedElement } from "./session.js";
 
 /** Agent-visible description of one interactive element. */
@@ -44,6 +49,8 @@ const INTERACTIVE_SELECTOR = [
 ].join(", ");
 
 const REDACTED_FIELD = "[REDACTED:secret-filled-field]";
+/** Characters of an element's text the agent sees. */
+const MAX_ELEMENT_TEXT = 120;
 
 type RawInfo = {
   tag: string;
@@ -103,7 +110,9 @@ export async function captureSnapshot(
     if (info.type) el.type = info.type;
     if (info.name) el.name = info.name;
     if (info.label) el.label = info.label;
-    if (info.text) el.text = info.text;
+    if (info.text) {
+      el.text = scrubThenCut(registry, info.text, MAX_ELEMENT_TEXT);
+    }
     if (info.disabled) el.disabled = true;
     if (info.value !== undefined) {
       const target = redactionTarget(top, uid);
@@ -167,8 +176,10 @@ function tagSplitCopies(
   }
 }
 
+/** Reads one element. Its text comes back whole, or not at all when it is
+ * too long to scan, so the caller can scrub it before the cut. */
 function describeElement(handle: ElementHandle<Element>): Promise<RawInfo> {
-  return handle.evaluate((el) => {
+  return handle.evaluate((el, maxScanned) => {
     const input = el as HTMLInputElement;
     const rect = el.getBoundingClientRect();
     const labelText =
@@ -201,13 +212,18 @@ function describeElement(handle: ElementHandle<Element>): Promise<RawInfo> {
     const name = el.getAttribute("name") ?? el.getAttribute("id");
     if (name) info.name = name;
     if (labelText) info.label = labelText.trim();
-    const text = (el as HTMLElement).innerText?.trim().slice(0, 120);
-    if (text && el.tagName !== "INPUT" && el.tagName !== "TEXTAREA") {
+    const text = (el as HTMLElement).innerText?.trim();
+    if (
+      text &&
+      text.length <= maxScanned &&
+      el.tagName !== "INPUT" &&
+      el.tagName !== "TEXTAREA"
+    ) {
       info.text = text;
     }
     if ("value" in el && typeof input.value === "string") {
       info.value = input.value;
     }
     return info;
-  });
+  }, MAX_SCANNED_TEXT);
 }

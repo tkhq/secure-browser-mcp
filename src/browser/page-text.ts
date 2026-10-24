@@ -25,14 +25,31 @@ const MAX_HEADINGS = 20;
 const MAX_ALERTS = 10;
 /** Characters per entry the agent sees. */
 const MAX_ENTRY = 200;
-/** Characters per entry read from the page. Larger than MAX_ENTRY so the
- * text is scrubbed before it is cut: a cut first could leave part of a
- * secret that the value scan no longer recognizes. */
-const MAX_RAW_ENTRY = 4 * MAX_ENTRY;
+/**
+ * The longest text read from the page. Text is scanned whole and cut only
+ * after the scan: a cut first could leave the start of a secret that the
+ * scan no longer recognizes. Longer text is left out, not cut.
+ */
+export const MAX_SCANNED_TEXT = 16_384;
+
+/**
+ * Replaces the secrets in `text`, then cuts it to `max` characters. The
+ * text must be complete, not already cut: a part of a secret does not
+ * match the scan.
+ */
+export function scrubThenCut(
+  registry: RedactionRegistry,
+  text: string,
+  max: number,
+): string {
+  const scrubbed = registry.scrubText(text);
+  return scrubbed.length > max ? `${scrubbed.slice(0, max - 1)}…` : scrubbed;
+}
 
 /**
  * Reads headings and alert regions of the top-level document, in document
- * order. Each entry goes through the value scan before it is cut to size.
+ * order. Each entry goes through the value scan before it is cut to size,
+ * and an entry too long to scan whole is left out.
  * innerText leaves out form field values, so a filled field's value never
  * gets here; a secret the page shows as text is replaced with its marker.
  */
@@ -41,7 +58,7 @@ export async function capturePageText(
   registry: RedactionRegistry,
 ): Promise<PageText> {
   const raw = await page.evaluate(
-    (headings, alerts, maxHeadings, maxAlerts, maxRaw) => {
+    (headings, alerts, maxHeadings, maxAlerts, maxScanned) => {
       const visible = (el: Element) => {
         const rect = el.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0;
@@ -55,9 +72,8 @@ export async function capturePageText(
           if (!visible(el)) continue;
           const text = (el as HTMLElement).innerText
             ?.replace(/\s+/g, " ")
-            .trim()
-            .slice(0, maxRaw);
-          if (text) out.push(text);
+            .trim();
+          if (text && text.length <= maxScanned) out.push(text);
         }
         return out;
       };
@@ -70,14 +86,9 @@ export async function capturePageText(
     ALERTS,
     MAX_HEADINGS,
     MAX_ALERTS,
-    MAX_RAW_ENTRY,
+    MAX_SCANNED_TEXT,
   );
-  const clean = (text: string) => {
-    const scrubbed = registry.scrubText(text);
-    return scrubbed.length > MAX_ENTRY
-      ? `${scrubbed.slice(0, MAX_ENTRY - 1)}…`
-      : scrubbed;
-  };
+  const clean = (text: string) => scrubThenCut(registry, text, MAX_ENTRY);
   return {
     headings: raw.headings.map(clean),
     alerts: raw.alerts.map(clean),
