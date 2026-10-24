@@ -58,6 +58,10 @@ export class BrowserSession {
     this.page = pages[0] ?? (await this.browser.newPage());
     this.cdp = await this.page.createCDPSession();
     // Element uids are backendNodeId-based and die with the document.
+    // Redaction tags stay: they are keyed by document, so a new document
+    // that reuses node ids never matches them. Dropping them here would
+    // unredact a filled field that Back restores from the back/forward
+    // cache, which keeps the document and its values.
     this.page.on("framenavigated", (frame) => {
       if (frame === this.page?.mainFrame()) this.clearElements();
     });

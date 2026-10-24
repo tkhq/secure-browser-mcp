@@ -12,7 +12,7 @@ The agent drives a browser but never reads secret material. Treat every secret a
 2. **Navigate and inspect.** Use `navigate`, then `snapshot`. Snapshot element IDs become invalid after navigation, so take a fresh snapshot whenever the page changes.
 3. **Fill visible values normally.** Use `type_text` only for non-secret values such as email or ZIP code.
 4. **Fill credentials by reference.** Use `fill_secret` with the secret ID and current element ID. For JSON payloads, pass declared field keys in one call.
-5. **Verify and submit.** A follow-up snapshot shows a structural redaction marker instead of a value. Click submit, then snapshot until the page changes.
+5. **Verify and submit.** The `fill_secret` result says if each field kept its value (`confirmed`, and `matches`, `length` and `valid` per field), never the value itself. A follow-up snapshot shows a structural redaction marker instead of a value. Click submit, then snapshot until the page changes.
 
 ## Destination bindings
 

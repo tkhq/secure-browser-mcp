@@ -54,7 +54,8 @@
             <td>None</td>
             <td>
               Returns interactive elements with IDs for subsequent
-              click/type/fill operations. Filled values are redacted.
+              click/type/fill operations, and the page's headings and alert or
+              status text. Filled values are redacted.
             </td>
           </tr>
           <tr>
@@ -76,8 +77,9 @@
               <code>fields</code>
             </td>
             <td>
-              Checks the binding, requests export, then injects via CDP. May
-              return <code>pending_approval</code>.
+              Checks the binding, requests export, injects via CDP, then reports
+              per field if the page kept the value (never the value). May return
+              <code>pending_approval</code>.
             </td>
           </tr>
           <tr>
@@ -89,13 +91,6 @@
             <td>
               Waits for approval, revalidates the target, and completes the
               pending fill; it can remain pending.
-            </td>
-          </tr>
-          <tr>
-            <td><code>list_network_requests</code></td>
-            <td>None</td>
-            <td>
-              Reserved scaffold; currently returns <code>not_implemented</code>.
             </td>
           </tr>
         </tbody>

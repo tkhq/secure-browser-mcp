@@ -10,7 +10,6 @@ import {
 } from "./tools/browser-handles.js";
 import { click } from "./tools/click.js";
 import { fillSecret } from "./tools/fill-secret.js";
-import { listNetwork } from "./tools/list-network.js";
 import { listSecretRefs } from "./tools/list-secret-refs.js";
 import { navigate } from "./tools/navigate.js";
 import { snapshot } from "./tools/snapshot.js";
@@ -21,6 +20,9 @@ import type { AnyToolDef, BrokerContext } from "./tools/tool.js";
 // JS could hook input events and exfiltrate a secret before or after a fill,
 // so script evaluation is excluded from the tool surface by design — see
 // docs/DESIGN.md and docs/THREAT-MODEL.md before adding anything here.
+//
+// list_network_requests (src/tools/list-network.ts) is left out until it
+// returns more than not_implemented (#17). Agents that see a tool try it.
 export const TOOLS: AnyToolDef[] = [
   openBrowser,
   closeBrowser,
@@ -31,7 +33,6 @@ export const TOOLS: AnyToolDef[] = [
   typeText,
   fillSecret,
   awaitFill,
-  listNetwork,
 ];
 
 export function createServer(ctx: BrokerContext): McpServer {

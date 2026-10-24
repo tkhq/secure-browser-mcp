@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { ConsensusNeededError } from "../broker/secrets-client.js";
 import {
+  filledResult,
   injectResolved,
   specsFromArgs,
   targetArgs,
@@ -110,13 +111,9 @@ export const fillSecret = defineTool({
     //    write and must still be the destination checked in step 3; each
     //    part registers with the redaction registry BEFORE the value
     //    touches the page, then the value is dropped.
-    await injectResolved(ctx, exported, validated);
+    const checks = await injectResolved(ctx, exported, validated);
 
-    // Outcome only — never the value.
-    return {
-      filled: true,
-      secret_id: ref.secretId,
-      element_uids: specs.map((s) => s.elementUid),
-    };
+    // Outcome and read-back facts only — never the value.
+    return filledResult(ref.secretId, specs, checks);
   },
 });

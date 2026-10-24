@@ -7,8 +7,9 @@ export const snapshot = defineTool({
   browser: true,
   description:
     "Snapshot of the current page's interactive elements with stable " +
-    "element uids for click/type/fill targeting. Values of fields that " +
-    "received a secret are structurally redacted.",
+    "element uids for click/type/fill targeting, plus the page's headings " +
+    "and alert or status text, to read results and errors. Values of " +
+    "fields that received a secret are structurally redacted.",
   inputSchema: {},
   handler: async (ctx) => {
     // Structural redaction (tagged fields, password inputs) happens inside

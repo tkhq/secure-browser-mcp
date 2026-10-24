@@ -14,6 +14,9 @@ export function startFixtureServer(): { stop: () => void } {
     new URL("./checkout-formatted.html", import.meta.url),
   );
   const splitHtml = Bun.file(new URL("./checkout-split.html", import.meta.url));
+  const clearingHtml = Bun.file(
+    new URL("./checkout-clearing.html", import.meta.url),
+  );
   const receiptHtml = Bun.file(new URL("./receipt.html", import.meta.url));
   const server = Bun.serve({
     port: FIXTURE_PORT,
@@ -32,6 +35,9 @@ export function startFixtureServer(): { stop: () => void } {
         return new Response(formattedHtml);
       }
       if (pathname === "/checkout-split") return new Response(splitHtml);
+      if (pathname === "/checkout-clearing") {
+        return new Response(clearingHtml);
+      }
       if (pathname === "/pay" && req.method === "POST") {
         return new Response(receiptHtml);
       }

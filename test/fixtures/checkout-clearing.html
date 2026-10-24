@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Checkout (drops the card number)</title>
+  </head>
+  <body>
+    <!--
+      A broken payment form: the card number input clears itself on every
+      input event, the expiry field wants MM/YY, so a plain MMYY value is
+      invalid, and the CVC field removes itself on change. A fill must
+      report all three instead of a bare success.
+    -->
+    <form id="checkout" action="/pay" method="post">
+      <label for="cardNumber">Card number</label>
+      <input type="text" id="cardNumber" name="cardNumber" />
+      <label for="cardExpiry">Expiry (MM/YY)</label>
+      <input
+        type="text"
+        id="cardExpiry"
+        name="cardExpiry"
+        pattern="[0-9]{2}/[0-9]{2}"
+      />
+      <label for="cardCvc">CVC</label>
+      <input type="password" id="cardCvc" name="cardCvc" />
+      <button type="submit">Pay $9.99</button>
+    </form>
+    <script>
+      const number = document.getElementById("cardNumber");
+      number.addEventListener("input", () => {
+        number.value = "";
+      });
+      const cvc = document.getElementById("cardCvc");
+      cvc.addEventListener("change", () => cvc.remove());
+    </script>
+  </body>
+</html>

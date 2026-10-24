@@ -10,6 +10,8 @@ import { McpStdioClient } from "./mcp-client.js";
  */
 
 const DEMO_PLAINTEXT = "mock-demo-p@ssw0rd-1234"; // mock-secrets.ts seed
+/** The fixture server on another site, for a cross-site navigation. */
+const OTHER_SITE = FIXTURE_ORIGIN.replace("localhost", "127.0.0.1");
 
 let fixture: { stop: () => void };
 let client: McpStdioClient;
@@ -38,7 +40,6 @@ test("lists the full tool surface, without evaluate_script", async () => {
     "type_text",
     "fill_secret",
     "await_fill",
-    "list_network_requests",
   ]);
 });
 
@@ -73,7 +74,20 @@ test("fills a secret without ever exposing it", async () => {
     element_uid: password!.uid,
   });
   expect(fill.isError).toBe(false);
-  expect(fill.body).toMatchObject({ filled: true, secret_id: demo!.secretId });
+  expect(fill.body).toEqual({
+    filled: true,
+    confirmed: true,
+    secret_id: demo!.secretId,
+    element_uids: [password!.uid],
+    fields: [
+      {
+        element_uid: password!.uid,
+        length: DEMO_PLAINTEXT.length,
+        matches: true,
+        valid: true,
+      },
+    ],
+  });
 
   // The post-fill snapshot shows the field structurally redacted.
   const snap2 = (await client.callTool("snapshot")).body as {
@@ -161,6 +175,83 @@ test("fills a JSON card secret into several fields with one call", async () => {
   expect(client.transcript).not.toContain("4242424242424242");
 });
 
+test("a new document does not inherit the old document's redaction tags", async () => {
+  const refs = (await client.callTool("list_secret_refs")).body as {
+    refs: { secretId: string; name?: string }[];
+  };
+  const card = refs.refs.find((r) => r.name === "demo-card");
+  type Snap = { elements: { uid: string; name?: string; value?: string }[] };
+  const cardFields = ["cardNumber", "cardExpiry", "cardCvc"];
+  const checkout = async (origin: string) => {
+    await client.callTool("navigate", { url: `${origin}/checkout` });
+    return (await client.callTool("snapshot")).body as Snap;
+  };
+  const uids = (snap: Snap) =>
+    cardFields.map((name) => snap.elements.find((e) => e.name === name)!.uid);
+  const fillCard = (snap: Snap) => {
+    const [number, expiry, cvc] = uids(snap);
+    return client.callTool("fill_secret", {
+      secret_id: card!.secretId,
+      fields: [
+        { key: "number", element_uid: number },
+        { key: "expiry", element_uid: expiry },
+        { key: "cvc", element_uid: cvc },
+      ],
+    });
+  };
+  const values = (snap: Snap) =>
+    cardFields.map((name) => snap.elements.find((e) => e.name === name)?.value);
+  const redacted = cardFields.map(() => "[REDACTED:secret-filled-field]");
+
+  // A cross-site load gets a new renderer process, and a new process
+  // numbers its nodes from the start again. So the fixture form gets the
+  // same uids each time it loads after a cross-site hop.
+  await checkout(OTHER_SITE);
+  const first = await checkout(FIXTURE_ORIGIN);
+  expect((await fillCard(first)).isError).toBe(false);
+  expect(values((await client.callTool("snapshot")).body as Snap)).toEqual(
+    redacted,
+  );
+
+  await checkout(OTHER_SITE);
+  const second = await checkout(FIXTURE_ORIGIN);
+  expect(uids(second)).toEqual(uids(first));
+  expect(values(second)).toEqual(["", "", ""]);
+
+  // A new fill tags the fields again.
+  expect((await fillCard(second)).isError).toBe(false);
+  expect(values((await client.callTool("snapshot")).body as Snap)).toEqual(
+    redacted,
+  );
+});
+
+test("snapshot shows the receipt page's confirmation text", async () => {
+  // The previous test left a filled checkout form on the page.
+  const form = (await client.callTool("snapshot")).body as {
+    url: string;
+    text: { headings: string[] };
+    elements: { uid: string; text?: string }[];
+  };
+  expect(form.url).toBe(`${FIXTURE_ORIGIN}/checkout`);
+  expect(form.text.headings).toEqual(["Checkout"]);
+  const pay = form.elements.find((e) => e.text === "Pay $9.99")!;
+  expect(
+    (await client.callTool("click", { element_uid: pay.uid })).isError,
+  ).toBe(false);
+
+  type Snap = { url: string; text: { headings: string[]; alerts: string[] } };
+  let receipt: Snap | undefined;
+  for (let i = 0; i < 50 && !receipt?.url.endsWith("/pay"); i++) {
+    await Bun.sleep(100);
+    receipt = (await client.callTool("snapshot")).body as Snap;
+  }
+  expect(receipt?.url).toBe(`${FIXTURE_ORIGIN}/pay`);
+  expect(receipt?.text).toEqual({
+    headings: ["Payment complete"],
+    alerts: ["Your demo order is confirmed. Nothing was charged."],
+  });
+});
+
 test("redacts a card number the page reformats, re-renders and echoes", async () => {
   const refs = (await client.callTool("list_secret_refs")).body as {
     refs: { secretId: string; name?: string }[];
@@ -184,8 +275,14 @@ test("redacts a card number the page reformats, re-renders and echoes", async ()
     ],
   });
   expect(fill.isError).toBe(false);
+  // The page grouped the number in fours; it still holds the secret.
+  expect(fill.body).toMatchObject({
+    confirmed: true,
+    fields: [{ key: "number", length: 19, matches: true }, {}, {}],
+  });
 
   const snap2 = (await client.callTool("snapshot")).body as {
+    text: { alerts: string[] };
     elements: { uid: string; name?: string; text?: string; value?: string }[];
   };
   // The page replaced the number input, so it has a fresh, untagged uid.
@@ -196,6 +293,10 @@ test("redacts a card number the page reformats, re-renders and echoes", async ()
   expect(summary.value).toBe("[REDACTED:secret-filled-field]");
   const pay = snap2.elements.find((e) => e.text?.startsWith("Pay"))!;
   expect(pay.text).toBe(`Pay $9.99 with [REDACTED:${card!.secretId}]`);
+  // The page also shows the number as status text.
+  expect(snap2.text.alerts).toEqual([
+    `Card [REDACTED:${card!.secretId}] saved`,
+  ]);
 
   expect(client.transcript).not.toContain("4242 4242 4242 4242");
   expect(client.transcript).not.toMatch(/4242\D?4242\D?4242\D?4242/);
@@ -286,6 +387,62 @@ test("a browser_id names a browser of its own, beside the session's", async () =
   const gone = await client.callTool("snapshot", { browser_id });
   expect(gone.isError).toBe(true);
   expect(gone.text).toContain("Unknown browser_id");
+});
+
+test("reports a field the page cleared, rejects or removed after a fill", async () => {
+  const refs = (await client.callTool("list_secret_refs")).body as {
+    refs: { secretId: string; name?: string }[];
+  };
+  const card = refs.refs.find((r) => r.name === "demo-card");
+
+  await client.callTool("navigate", {
+    url: `${FIXTURE_ORIGIN}/checkout-clearing`,
+  });
+  const snap = (await client.callTool("snapshot")).body as {
+    elements: { uid: string; name?: string }[];
+  };
+  const byName = (name: string) =>
+    snap.elements.find((e) => e.name === name)!.uid;
+  const fill = await client.callTool("fill_secret", {
+    secret_id: card!.secretId,
+    fields: [
+      { key: "number", element_uid: byName("cardNumber") },
+      { key: "expiry", element_uid: byName("cardExpiry") },
+      { key: "cvc", element_uid: byName("cardCvc") },
+    ],
+  });
+  expect(fill.isError).toBe(false);
+  expect(fill.body).toEqual({
+    filled: true,
+    confirmed: false,
+    secret_id: card!.secretId,
+    element_uids: [
+      byName("cardNumber"),
+      byName("cardExpiry"),
+      byName("cardCvc"),
+    ],
+    fields: [
+      {
+        element_uid: byName("cardNumber"),
+        key: "number",
+        length: 0,
+        matches: false,
+        valid: true,
+      },
+      {
+        element_uid: byName("cardExpiry"),
+        key: "expiry",
+        length: 4,
+        matches: true,
+        valid: false,
+      },
+      // The page removed the field. Its detached node still holds the
+      // value, but that is not a confirmation.
+      { element_uid: byName("cardCvc"), key: "cvc", matches: false },
+    ],
+  });
+  // The facts hold no part of any value.
+  expect(fill.text).not.toMatch(/4242|"1234"|"123"/);
 });
 
 test("the plaintext never appeared anywhere in server output", () => {
