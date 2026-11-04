@@ -20,7 +20,7 @@ The secure-browser MCP server is a credential broker that owns a browser. You dr
 
 `list_secret_refs` returns `backend: "mock" | "turnkey"` along with `refs`. Check it before advising an import. Mock is the default and contains fixed demo seeds; importing into Turnkey will not change mock results. Turnkey is selected only when all three broker environment variables (`TURNKEY_API_PUBLIC_KEY`, `TURNKEY_API_PRIVATE_KEY`, `TURNKEY_ORGANIZATION_ID`) are nonempty. Ask the user to configure the broker environment and restart it when needed; never request private keys in chat.
 
-For a missing Turnkey reference, direct the user to run `scripts/import-secret.ts --help` from their secure-browser-mcp checkout in their own terminal. It takes name, origin, optional pathname pattern, selector or fields, and `--value-env` naming an environment variable containing the value. It requires confirmation and prints only metadata. Do not read or collect the secret yourself.
+For a missing Turnkey reference, verify the live destination and call `create_secret` with only a non-sensitive name, exact origin, optional `url_pattern`, and either `selector` or `fields`. It offers a dashboard URL through elicitation, or returns `import_url` for the human. Never open it in any agent-controlled browser. The human reviews the proposed immutable bindings, checks the organization, and enters the value in their own dashboard browser. Accepting URL elicitation is not import completion: wait for the human, then refresh `list_secret_refs` and verify the resulting binding. Respect decline/cancel; do not reopen without the human's request. Never provide a value in tool arguments or link metadata. If the dashboard deep-link flow is not deployed, the human can run `scripts/import-secret.ts --help` in their own terminal instead. Do not read or collect the secret yourself.
 
 Import creates immutable static properties: `sbm:origin` is the exact page origin, `sbm:url-pattern` narrows the pathname, `sbm:selector` restricts a single field, and `sbm:fields` maps JSON payload keys to CSS selectors. Verify the live destination before import. There is no deletion workflow in the current tooling; correcting a binding requires a new import.
 
@@ -45,6 +45,8 @@ If a browser tool says it needs a `browser_id`, or the page you navigated to is 
 ## Consensus approvals
 
 Some secrets need multi-party approval to export. `fill_secret` then returns `status: "pending_approval"` with a `fill_id`, a Turnkey `activity_id`, and usually an `approval_url` instead of filling. This is normal, not an error:
+
+With URL elicitation support, the client first offers the activity page to the human. Accept means consent to open the page, not Turnkey approval. Decline/cancel dismisses only the URL handoff; it does not cancel the activity. Respect dismissal and do not reopen or continue the fill without the human's request. Never open the approval page in an agent-controlled browser to approve it yourself.
 
 1. Tell the user approval is needed and give them the `approval_url` exactly as returned, as a full `https://` link on its own line (it opens the activity in the Turnkey dashboard, where it can also be approved from the Turnkey mobile app). Never shorten it, rewrite it, or replace it with the bare activity id. Only if there is no `approval_url` should you fall back to naming the `activity_id` and the Turnkey dashboard.
 2. Leave the page where it is — the fill re-validates the destination before injecting.

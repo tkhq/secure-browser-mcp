@@ -1,6 +1,6 @@
 # Tool reference
 
-Nine working tools and one registered, unavailable stub. All results are redacted server-side before you see them.
+Ten working tools and one registered, unavailable stub. All results are redacted server-side before you see them.
 
 Every browser tool (navigate, snapshot, click, type_text, fill_secret, await_fill, list_network_requests) also takes an optional `browser_id` from `open_browser`. With it, the tool acts in that browser. Without it, the tool uses the connection's own browser. A connection with no browser of its own (an MCP 2026-07-28 client) must pass `browser_id`.
 
@@ -35,6 +35,10 @@ No arguments. Returns `{ browser_id, idle_timeout_seconds }`. Opens a broker-own
 ```
 
 No tool ever returns a secret's value.
+
+## create_secret
+
+`{ name: string, origin: string, url_pattern?: string, selector?: string, fields?: Record<string, string> }`. Requires the Turnkey backend. Provide an exact HTTP(S) origin and exactly one of `selector` or `fields` (payload-key to CSS-selector map). Never provide a secret value or personal information: all arguments become visible link metadata. Returns `{ created: false, status: "pending_import" | "decline" | "cancel", import_url, elicitation_action? }`. This is a human-only dashboard handoff, not a broker-side import. The dashboard opens Create secret with editable proposed bindings and an empty value; the human must log in to the broker's organization, review, and submit. Do not navigate any agent-controlled browser to this page. Wait for the human to finish, then call `list_secret_refs` and verify the resulting binding. URL-capable clients get elicitation; others get the same link. Accept is not completion. Respect decline/cancel and do not reopen without a human request.
 
 ## navigate
 

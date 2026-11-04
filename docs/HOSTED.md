@@ -143,7 +143,7 @@ The broker caches each JWKS for 10 minutes and refetches it, at most every 30 se
 | ------------ | ------------------------------------------------------------------------------------------------------ |
 | `sbm:browse` | `open_browser`, `close_browser`, `navigate`, `snapshot`, `click`, `type_text`, `list_network_requests` |
 | `sbm:fill`   | `fill_secret`, `await_fill`                                                                            |
-| `sbm:refs`   | `list_secret_refs`                                                                                     |
+| `sbm:refs`   | `list_secret_refs`, `create_secret` (dashboard handoff only; no broker-side import)                    |
 
 The scopes apply the same way to both protocol versions. Opening a session needs at least one of these scopes; without one, the broker answers `403 insufficient_scope` with `scope="sbm:browse"`. Listing tools needs nothing more. An agent that fills secrets needs all three. The broker checks scopes on every request against that request's token, so a client that steps up its token gets the new scopes in the same session.
 

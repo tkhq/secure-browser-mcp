@@ -12,6 +12,7 @@ import type { PendingFills } from "./broker/pending-store.js";
 import type { SecretsClient } from "./broker/secrets-client.js";
 import {
   dashboardActivityUrl,
+  dashboardCreateSecretUrl,
   turnkeyClient,
   turnkeyClientFromEnv,
 } from "./broker/turnkey-env.js";
@@ -32,12 +33,17 @@ import type { BrokerContext } from "./tools/tool.js";
 export type Secrets = {
   client: SecretsClient;
   backend: "mock" | "turnkey";
+  organizationId?: string;
 };
 
 export function makeSecretsClient(): Secrets {
   const apiClient = turnkeyClientFromEnv();
   if (apiClient) {
-    return { client: new TurnkeySecretsClient(apiClient), backend: "turnkey" };
+    return {
+      client: new TurnkeySecretsClient(apiClient),
+      backend: "turnkey",
+      organizationId: process.env["TURNKEY_ORGANIZATION_ID"]!,
+    };
   }
   return { client: mockFromEnv(), backend: "mock" };
 }
@@ -64,7 +70,11 @@ export function tenantSecretsClient(tenant: TenantConfig): Secrets {
     ...resolveApiKey(tenant),
     organizationId: tenant.organizationId,
   });
-  return { client: new TurnkeySecretsClient(apiClient), backend: "turnkey" };
+  return {
+    client: new TurnkeySecretsClient(apiClient),
+    backend: "turnkey",
+    organizationId: tenant.organizationId,
+  };
 }
 
 const CHROME_CANDIDATES = [
@@ -92,6 +102,7 @@ export function findChrome(): string {
 export type Broker = {
   secrets: SecretsClient;
   backend: "mock" | "turnkey";
+  organizationId?: string;
   /** Builds one browser host per agent session. */
   browserHost: () => BrowserHost;
   browser: "local" | "browserbase";
@@ -139,11 +150,12 @@ function browserHostFromEnv(): Pick<Broker, "browserHost" | "browser"> {
 
 /** A broker over `secrets`, by default the TURNKEY_* key (or the mock). */
 export function makeBroker(
-  { client, backend }: Secrets = makeSecretsClient(),
+  { client, backend, organizationId }: Secrets = makeSecretsClient(),
 ): Broker {
   return {
     secrets: client,
     backend,
+    ...(organizationId ? { organizationId } : {}),
     ...browserHostFromEnv(),
   };
 }
@@ -159,6 +171,12 @@ export function brokerContext(
     browsers,
     ...(broker.backend === "turnkey"
       ? { approvalUrl: dashboardActivityUrl }
+      : {}),
+    ...(broker.backend === "turnkey" && broker.organizationId
+      ? {
+          createSecretUrl: (name: string, properties: Record<string, string>) =>
+            dashboardCreateSecretUrl(broker.organizationId!, name, properties),
+        }
       : {}),
   };
 }
