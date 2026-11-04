@@ -19,9 +19,9 @@
  *
  * A cancel frees the id at once, but the aborted handler keeps running. A
  * notification or elicitation it then sends with `relatedRequestId` goes to
- * the stream of a new request that reuses the id. No tool sends these
- * today. A tool that does must check `signal.aborted` before each send, or
- * the id must stay reserved until the handler returns.
+ * the stream of a new request that reuses the id. server.ts checks the
+ * request's abort signal before sending URL elicitation. Any future send
+ * must do the same, or reserve the id until the handler returns.
  */
 import type { JSONRPCMessage, RequestId } from "@modelcontextprotocol/server";
 

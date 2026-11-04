@@ -1,3 +1,7 @@
+import type {
+  ElicitRequestURLParams,
+  ElicitResult,
+} from "@modelcontextprotocol/server";
 import type { ZodObject, ZodRawShape, output } from "zod";
 
 import type { Scope } from "../auth/scopes.js";
@@ -15,6 +19,11 @@ export type BrokerContext = {
   /** Dashboard link for an approval-gated activity; undefined when the
    * backend has no dashboard (mock) or the API host is unknown. */
   approvalUrl?: (activityId: string) => string | undefined;
+  /** A dashboard-only handoff; this never imports through the broker. */
+  createSecretUrl?: (
+    name: string,
+    staticProperties: Record<string, string>,
+  ) => string | undefined;
 };
 
 /**
@@ -23,7 +32,14 @@ export type BrokerContext = {
  * names, or the connection's own (src/browsers.ts). `secrets` is shared by
  * every browser of the broker.
  */
-export type ToolContext = BrokerContext & BrowserContext;
+export type ToolContext = BrokerContext &
+  BrowserContext & {
+    /** Request-scoped, capability-negotiated URL consent. Consent is not
+     * proof of an import or Turnkey approval. Undefined for direct callers. */
+    requestUrl?: (
+      params: ElicitRequestURLParams,
+    ) => Promise<ElicitResult["action"] | undefined>;
+  };
 
 /**
  * Tool results are plain JSON values. `server.ts` owns serialization: every

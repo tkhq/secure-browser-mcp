@@ -32,6 +32,29 @@ export function pendingResult(ctx: ToolContext, fill: PendingFill) {
   };
 }
 
+async function requestApproval(ctx: ToolContext, fill: PendingFill) {
+  const result = pendingResult(ctx, fill);
+  const action = result.approval_url
+    ? await ctx.requestUrl?.({
+        mode: "url",
+        elicitationId: fill.fillId,
+        url: result.approval_url,
+        message:
+          "This secret export requires Turnkey consensus. Open the activity in your own dashboard browser to review it. Opening this link does not approve the export.",
+      })
+    : undefined;
+  return {
+    ...result,
+    ...(action ? { elicitation_action: action } : {}),
+    ...(action === "decline" || action === "cancel"
+      ? {
+          message:
+            "Dashboard handoff dismissed; the export is still pending, not rejected or cancelled in Turnkey. No fill occurred. Do not reopen without the human's request.",
+        }
+      : {}),
+  };
+}
+
 function specsKey(secretId: string, specs: FillFieldSpec[]): string {
   const parts = specs.map((s) => `${s.key ?? ""}:${s.elementUid}`).sort();
   return `${secretId}|${parts.join(",")}`;
@@ -66,14 +89,7 @@ export const fillSecret = defineTool({
     //    the binding baked into the secret's static properties at import.
     const validated = await validateTargets(ctx, ref, specs);
 
-    // 4. TODO: human confirmation (elicitation / MCP App) — later milestone.
-    //    A cancel frees this request's id while the handler still runs, so
-    //    check the request's `signal.aborted` (from the SDK's handler
-    //    context, which server.ts does not pass to tools yet) before each
-    //    elicitation or related notification. Otherwise it can reach a new
-    //    request that reuses the id (src/inflight.ts).
-
-    // 5. Idempotency, BEFORE any export attempt: re-requesting a fill that
+    // 4. Idempotency, BEFORE any export attempt: re-requesting a fill that
     //    is already parked on approval returns the same handle. Checking
     //    after the export would submit a duplicate proposal every retry.
     //    (If the parked activity was meanwhile rejected, await_fill reports
@@ -82,9 +98,9 @@ export const fillSecret = defineTool({
     const existing = ctx.pendingFills
       .list()
       .find((f) => specsKey(f.pending.ref.secretId, f.targets) === requestKey);
-    if (existing) return pendingResult(ctx, existing);
+    if (existing) return requestApproval(ctx, existing);
 
-    // 6. Export: plaintext lands in broker memory only. A consensus-gated
+    // 5. Export: plaintext lands in broker memory only. A consensus-gated
     //    export parks the fill instead of failing it: the broker keeps the
     //    decryption key and the targets, hands the agent an opaque fill id,
     //    and await_fill completes the fill once approvers reach quorum.
@@ -101,12 +117,12 @@ export const fillSecret = defineTool({
           createdAt: Date.now(),
         };
         await ctx.pendingFills.put(fill);
-        return pendingResult(ctx, fill);
+        return requestApproval(ctx, fill);
       }
       throw err;
     }
 
-    // 7. Inject via CDP. Each target is authorized again just before its
+    // 6. Inject via CDP. Each target is authorized again just before its
     //    write and must still be the destination checked in step 3; each
     //    part registers with the redaction registry BEFORE the value
     //    touches the page, then the value is dropped.

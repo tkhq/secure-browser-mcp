@@ -32,6 +32,7 @@ test("lists the full tool surface, without evaluate_script", async () => {
     "open_browser",
     "close_browser",
     "list_secret_refs",
+    "create_secret",
     "navigate",
     "snapshot",
     "click",

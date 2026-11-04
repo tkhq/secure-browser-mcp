@@ -125,18 +125,18 @@ After updating this checkout, refresh an existing Hermes skill with `bun run ski
 
 ## Troubleshooting
 
-| Symptom                                     | Next step                                                                                                                                                       |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No secret reference for the target site     | Call `list_secret_refs` and check `backend`. Mock contains fixed demo seeds; switch to Turnkey and use the importer above. The MCP tools cannot import secrets. |
-| Card/password fields absent from `snapshot` | Expand any hidden form controls and snapshot again. Cross-origin iframe fields are unsupported; importing another secret cannot make them reachable.            |
-| No secure-browser tools                     | Check the active profile's config and YAML indentation, then restart Hermes. Confirm the generated Bun and checkout paths still exist.                          |
-| Skill is missing                            | Install it into the same Hermes home/profile used for chat. The skill and MCP connection are separate setup steps.                                              |
-| No Chromium-based browser found             | Install a supported browser or set `SBM_CHROME_PATH` to its executable on the Hermes host.                                                                      |
-| Browser fails on a remote machine           | Keep `SBM_HEADLESS: "true"` and check the host's Chromium installation and required system libraries.                                                           |
-| Navigation fails                            | Keep `bun run demo:fixture` running on the Hermes host. Use `/login`; the fixture root `/` returns 404.                                                         |
-| Port 4173 is occupied                       | Stop your previous fixture process. Changing the port also requires changing secret bindings.                                                                   |
-| Binding refusal                             | Check the secret's origin, URL pattern, and selector. Do not bypass the refusal or send the value through `type_text`.                                          |
-| Approval stays pending                      | Mock mode: check the delay setting. Turnkey mode: have the designated approver check the activity and policy. Keep the target page unchanged.                   |
-| Agent uses another browser                  | Explicitly load the secure-browser skill and request this MCP server's tools; browser sessions are separate.                                                    |
+| Symptom                                     | Next step                                                                                                                                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No secret reference for the target site     | Call `list_secret_refs` and check `backend`. Mock contains fixed demo seeds; switch to Turnkey, then use `create_secret` for a human-only dashboard handoff or the terminal importer above. |
+| Card/password fields absent from `snapshot` | Expand any hidden form controls and snapshot again. Cross-origin iframe fields are unsupported; importing another secret cannot make them reachable.                                        |
+| No secure-browser tools                     | Check the active profile's config and YAML indentation, then restart Hermes. Confirm the generated Bun and checkout paths still exist.                                                      |
+| Skill is missing                            | Install it into the same Hermes home/profile used for chat. The skill and MCP connection are separate setup steps.                                                                          |
+| No Chromium-based browser found             | Install a supported browser or set `SBM_CHROME_PATH` to its executable on the Hermes host.                                                                                                  |
+| Browser fails on a remote machine           | Keep `SBM_HEADLESS: "true"` and check the host's Chromium installation and required system libraries.                                                                                       |
+| Navigation fails                            | Keep `bun run demo:fixture` running on the Hermes host. Use `/login`; the fixture root `/` returns 404.                                                                                     |
+| Port 4173 is occupied                       | Stop your previous fixture process. Changing the port also requires changing secret bindings.                                                                                               |
+| Binding refusal                             | Check the secret's origin, URL pattern, and selector. Do not bypass the refusal or send the value through `type_text`.                                                                      |
+| Approval stays pending                      | Mock mode: check the delay setting. Turnkey mode: have the designated approver check the activity and policy. Keep the target page unchanged.                                               |
+| Agent uses another browser                  | Explicitly load the secure-browser skill and request this MCP server's tools; browser sessions are separate.                                                                                |
 
 When finished, exit Hermes and stop the fixture with Ctrl-C. To disconnect permanently, remove the `secure-browser` MCP entry and its installed skill folder from the active Hermes home.

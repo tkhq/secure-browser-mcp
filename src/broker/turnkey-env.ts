@@ -64,6 +64,31 @@ export function dashboardActivityUrl(activityId: string): string | undefined {
   return `${base}/activities/${encodeURIComponent(activityId)}`;
 }
 
+/** Metadata only. The dashboard requires login and an explicit human import. */
+export function dashboardCreateSecretUrl(
+  organizationId: string,
+  name: string,
+  staticProperties: Record<string, string>,
+): string | undefined {
+  const base = dashboardBaseFromEnv();
+  if (!base) return undefined;
+  const url = new URL(`${base}/secrets`);
+  url.searchParams.set("create", "true");
+  url.searchParams.set("organizationId", organizationId);
+  // TanStack JSON-decodes search values; quote even JSON-looking names so
+  // strings such as "123.0" or '{"label":"card"}' survive unchanged.
+  url.searchParams.set("name", JSON.stringify(name));
+  url.searchParams.set(
+    "staticProperties",
+    JSON.stringify(
+      Object.entries(staticProperties).map(([key, value]) => ({ key, value })),
+    ),
+  );
+  if (url.href.length > 8192)
+    throw new Error("Secret creation link is too large");
+  return url.href;
+}
+
 export function dashboardBaseFromEnv(): string | undefined {
   const override = process.env["SBM_DASHBOARD_URL"];
   if (override) return override.replace(/\/+$/, "");

@@ -1,4 +1,12 @@
-import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
+import { randomUUID } from "node:crypto";
+
+import {
+  McpServer,
+  inputRequired,
+  type CallToolResult,
+  type InputRequiredResult,
+  type ServerContext,
+} from "@modelcontextprotocol/server";
 import { RedactionRegistry } from "@turnkey/browser-secrets";
 import { z } from "zod";
 
@@ -9,6 +17,7 @@ import {
   openBrowser,
 } from "./tools/browser-handles.js";
 import { click } from "./tools/click.js";
+import { createSecret } from "./tools/create-secret.js";
 import { fillSecret } from "./tools/fill-secret.js";
 import { listNetwork } from "./tools/list-network.js";
 import { listSecretRefs } from "./tools/list-secret-refs.js";
@@ -25,6 +34,7 @@ export const TOOLS: AnyToolDef[] = [
   openBrowser,
   closeBrowser,
   listSecretRefs,
+  createSecret,
   navigate,
   snapshot,
   click,
@@ -47,7 +57,10 @@ export function createServer(ctx: BrokerContext): McpServer {
   const registerTool = server.registerTool.bind(server) as (
     name: string,
     config: { description: string; inputSchema: z.ZodObject },
-    cb: (args: Record<string, unknown>) => Promise<CallToolResult>,
+    cb: (
+      args: Record<string, unknown>,
+      request: ServerContext,
+    ) => Promise<CallToolResult | InputRequiredResult>,
   ) => void;
 
   for (const tool of TOOLS) {
@@ -64,13 +77,14 @@ export function createServer(ctx: BrokerContext): McpServer {
             : tool.inputSchema,
         ),
       },
-      async (input: Record<string, unknown>) => {
+      async (input: Record<string, unknown>, request: ServerContext) => {
         const { browser_id, ...rest } = input;
         const args = tool.browser ? rest : input;
         // Errors are scrubbed with the registry of the browser the call
         // ran in. One that fails before reaching a browser (an unknown
         // browser_id) has no secret to scrub.
         let registry = new RedactionRegistry();
+        let needed: InputRequiredResult | undefined;
         try {
           // Single choke point: every result — success or error — passes
           // through registry.scrub() before it reaches the transport. Args
@@ -81,12 +95,70 @@ export function createServer(ctx: BrokerContext): McpServer {
             async (browser) => {
               registry = browser.registry;
               const out = await tool.handler(
-                { ...ctx, ...browser },
+                {
+                  ...ctx,
+                  ...browser,
+                  requestUrl: async (params) => {
+                    const { signal } = request.mcpReq;
+                    // Cancellation frees the HTTP request id. Never send a
+                    // late elicitation onto a new request using that id.
+                    signal.throwIfAborted();
+                    const version =
+                      server.server.getNegotiatedProtocolVersion();
+                    const caps = server.server.getClientCapabilities();
+                    if (
+                      !caps?.elicitation?.url ||
+                      !version ||
+                      version < "2025-11-25"
+                    )
+                      return undefined;
+                    const safe = registry.scrub(params);
+                    if (safe.url !== params.url)
+                      throw new Error(
+                        "Refusing a dashboard link containing redacted material",
+                      );
+                    if (version === "2026-07-28") {
+                      const response =
+                        request.mcpReq.inputResponses?.[params.elicitationId];
+                      const action = z
+                        .object({
+                          action: z.enum(["accept", "decline", "cancel"]),
+                        })
+                        .safeParse(response);
+                      // This response is untrusted and grants no authority:
+                      // the dashboard imports and Turnkey checks quorum.
+                      if (action.success) return action.data.action;
+                      needed = inputRequired({
+                        inputRequests: {
+                          [params.elicitationId]: inputRequired.elicitUrl({
+                            url: safe.url,
+                            message: safe.message,
+                          }),
+                        },
+                      });
+                      return undefined;
+                    }
+                    try {
+                      const response = await request.mcpReq.elicitInput(
+                        { ...safe, elicitationId: randomUUID() },
+                        { signal },
+                      );
+                      signal.throwIfAborted();
+                      return response.action;
+                    } catch {
+                      signal.throwIfAborted();
+                      // An advertised but broken/expired prompt must not lose
+                      // the parked fill. Return the ordinary dashboard link.
+                      return undefined;
+                    }
+                  },
+                },
                 args as never,
               );
               return browser.registry.scrub(out);
             },
           );
+          if (needed) return needed;
           return {
             content: [
               {
